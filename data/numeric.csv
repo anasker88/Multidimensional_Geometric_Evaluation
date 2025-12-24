@@ -1,0 +1,79 @@
+question,dimension,answer
+"What is the number of vertices in a triangle?",2,3
+"What is the number of vertices in a triangular pyramid?",3,4
+"What is the number of vertices in a 4-simplex?",4,5
+"What is the number of vertices in a square?",2,4
+"What is the number of vertices in a cube?",3,8
+"What is the number of vertices in a tesseract?",4,16
+"What is the number of edges in a triangle?",2,3
+"What is the number of edges in a triangular pyramid?",3,6
+"What is the number of edges in a 4-simplex?",4,10
+"What is the number of edges in a square?",2,4
+"What is the number of edges in a cube?",3,12
+"What is the number of edges in a tesseract?",4,32
+"What is the number of faces in a triangle?",2,1
+"What is the number of faces in a triangular pyramid?",3,4
+"What is the number of faces in a 4-simplex?",4,10
+"What is the number of faces in a square?",2,1
+"What is the number of faces in a cube?",3,6
+"What is the number of faces in a tesseract?",4,24
+"What is the perimeter of a equilateral triangle with side length 6?",2,18
+"What is the surface area of a regular triangular pyramid whose faces are equilateral triangles with areas of 6?",3,24
+"What is the hyper-surface volume of a regular 4-simplex whose boundary is made of regular triangular pyramids with volume of 6?",4,30
+"What is the perimeter of a square with side length 6?",2,24
+"What is the surface area of a cube with edge length 6?",3,216
+"What is the hyper-surface volume of a tesseract with edge length 6?",4,1728
+"What is the perimeter of a rectangle with length 6 and width 4?",2,20
+"What is the surface area of a rectangular prism with length 6, width 4, and height 5?",3,148
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 6, width 4, height 5, and depth 3?",4,684
+"What multiple of \pi is the perimeter of a circle with radius 6?",2,12
+"What multiple of \pi is the surface area of a sphere with radius 6?",3,144
+"What multiple of \pi^2 is the hyper-surface volume of a 3-sphere with radius 6?",4,432
+"What is the area of a triangle with base 6 and height 8?",2,24
+"What is the volume of a triangular pyramid with base area 24 and height 10?",3,80
+"What is the hyper-volume of an irregular 4-simplex with base volume 80 and height 12?",4,240
+"What is the area of a right triangle with legs 6 and 8?",2,24
+"What is the volume of a right triangular pyramid with legs 6 and 8 and height 10?",3,80
+"What is the hyper-volume of a right irregular 4-simplex with legs 6 and 8 and height 10 and depth 12?",4,240
+"What is the area of a square with side length 6?",2,36
+"What is the volume of a cube with edge length 6?",3,216
+"What is the hyper-volume of a tesseract with edge length 6?",4,1296
+"What is the area of a rectangle with length 6 and width 4?",2,24
+"What is the volume of a rectangular prism with length 6, width 4, and height 5?",3,120
+"What is the hyper-volume of a rectangular 4-parallelotope with length 6, width 4, height 5, and depth 3?",4,360
+"What multiple of \pi is the area of a circle with radius 6?",2,36
+"What multiple of \pi is the volume of a sphere with radius 6?",3,288
+"What multiple of \pi^2 is the hyper-volume of a 3-sphere with radius 6?",4,648
+"What is the length of the diagonal of a rectangle with length 6 and width 8?",2,10
+"What is the length of the space diagonal of a rectangular prism with length 2, width 3, and height 6?",3,7
+"What is the length of the 4D diagonal of a rectangular 4-parallelotope with length 1, width 2, height 4, and depth 10?",4,11
+"What is the perimeter of a equilateral triangle with side length 6?",2,18
+"What is the surface area of a regular triangular pyramid whose faces are equilateral triangles with areas of 6?",3,24
+"What is the hyper-surface volume of a regular 4-simplex whose boundary is made of regular triangular pyramids with volume of 6?",4,30
+"What is the perimeter of a square with side length 8?",2,32
+"What is the surface area of a cube with edge length 8?",3,384
+"What is the hyper-surface volume of a tesseract with edge length 8?",4,4096
+"What is the perimeter of a rectangle with length 8 and width 6?",2,28
+"What is the surface area of a rectangular prism with length 8, width 6, and height 5?",3,236
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 8, width 6, height 5, and depth 3?",4,1188
+"What multiple of \pi is the perimeter of a circle with radius 8?",2,16
+"What multiple of \pi is the surface area of a sphere with radius 8?",3,256
+"What multiple of \pi^2 is the hyper-surface volume of a 3-sphere with radius 8?",4,1024
+"What is the area of a triangle with base 6 and height 7?",2,21
+"What is the volume of a triangular pyramid with base area 21 and height 10?",3,70
+"What is the hyper-volume of an irregular 4-simplex with base volume 70 and height 12?",4,210
+"What is the area of a right triangle with legs 6 and 7?",2,21
+"What is the volume of a right triangular pyramid with legs 6 and 7 and height 10?",3,70
+"What is the hyper-volume of a right irregular 4-simplex with legs 6 and 7 and height 10 and depth 12?",4,210
+"What is the area of a square with side length 8?",2,64
+"What is the volume of a cube with edge length 8?",3,512
+"What is the hyper-volume of a tesseract with edge length 8?",4,4096
+"What is the area of a rectangle with length 8 and width 6?",2,48
+"What is the volume of a rectangular prism with length 8, width 6, and height 5?",3,240
+"What is the hyper-volume of a rectangular 4-parallelotope with length 8, width 6, height 5, and depth 3?",4,720
+"What multiple of \pi is the area of a circle with radius 8?",2,64
+"What multiple of \pi is the volume of a sphere with radius 9?",3,972
+"What multiple of \pi^2 is the hyper-volume of a 3-sphere with radius 8?",4,2048
+"What is the length of the diagonal of a rectangle with length 5 and width 12?",2,13
+"What is the length of the space diagonal of a rectangular prism with length 1, width 4, and height 8?",3,9
+"What is the length of the 4D diagonal of a rectangular 4-parallelotope with length 2, width 4, height 5, and depth 6?",4,9

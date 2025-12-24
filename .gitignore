@@ -1,0 +1,6 @@
+logs
+results
+past_results
+.DS_Store
+run.sh
+__pycache__
