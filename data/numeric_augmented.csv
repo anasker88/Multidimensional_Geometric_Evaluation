@@ -1,0 +1,355 @@
+question,dimension,answer
+"What is the number of vertices in a triangle?",2,3
+"What is the number of vertices in a triangular pyramid?",3,4
+"What is the number of vertices in a 4-simplex?",4,5
+"What is the number of vertices in a square?",2,4
+"What is the number of vertices in a cube?",3,8
+"What is the number of vertices in a tesseract?",4,16
+"What is the number of edges in a triangle?",2,3
+"What is the number of edges in a triangular pyramid?",3,6
+"What is the number of edges in a 4-simplex?",4,10
+"What is the number of edges in a square?",2,4
+"What is the number of edges in a cube?",3,12
+"What is the number of edges in a tesseract?",4,32
+"What is the number of faces in a triangle?",2,1
+"What is the number of faces in a triangular pyramid?",3,4
+"What is the number of faces in a 4-simplex?",4,10
+"What is the number of faces in a square?",2,1
+"What is the number of faces in a cube?",3,6
+"What is the number of faces in a tesseract?",4,24
+"How many vertices does a triangle have?",2,3
+"How many vertices does a triangular pyramid have?",3,4
+"How many vertices does a 4-simplex have?",4,5
+"How many vertices does a square have?",2,4
+"How many vertices does a cube have?",3,8
+"How many vertices does a tesseract have?",4,16
+"How many edges does a triangle have?",2,3
+"How many edges does a triangular pyramid have?",3,6
+"How many edges does a 4-simplex have?",4,10
+"How many edges does a square have?",2,4
+"How many edges does a cube have?",3,12
+"How many edges does a tesseract have?",4,32
+"How many faces does a triangle have?",2,1
+"How many faces does a triangular pyramid have?",3,4
+"How many faces does a 4-simplex have?",4,10
+"How many faces does a square have?",2,1
+"How many faces does a cube have?",3,6
+"How many faces does a tesseract have?",4,24
+"What is the vertex count of a triangle?",2,3
+"What is the vertex count of a triangular pyramid?",3,4
+"What is the vertex count of a 4-simplex?",4,5
+"What is the vertex count of a square?",2,4
+"What is the vertex count of a cube?",3,8
+"What is the vertex count of a tesseract?",4,16
+"What is the edge count of a triangle?",2,3
+"What is the edge count of a triangular pyramid?",3,6
+"What is the edge count of a 4-simplex?",4,10
+"What is the edge count of a square?",2,4
+"What is the edge count of a cube?",3,12
+"What is the edge count of a tesseract?",4,32
+"What is the face count of a triangle?",2,1
+"What is the face count of a triangular pyramid?",3,4
+"What is the face count of a 4-simplex?",4,10
+"What is the face count of a square?",2,1
+"What is the face count of a cube?",3,6
+"What is the face count of a tesseract?",4,24
+"What is the perimeter of a square with side length 1?",2,4
+"What is the perimeter of a rectangle with length 2 and width 3?",2,10
+"What is the area of a right triangle with legs 3 and 4?",2,6
+"What multiple of pi is the circumference of a circle with radius 1?",2,2
+"What is the area of a square with side length 1?",2,1
+"What is the area of a rectangle with length 2 and width 3?",2,6
+"What is the length of the hypotenuse of a right triangle with legs 3 and 4?",2,5
+"What multiple of pi is the area of a circle with radius 1?",2,1
+"What is the perimeter of a square with side length 2?",2,8
+"What is the perimeter of a rectangle with length 2 and width 4?",2,12
+"What is the area of a right triangle with legs 5 and 12?",2,30
+"What multiple of pi is the circumference of a circle with radius 2?",2,4
+"What is the area of a square with side length 2?",2,4
+"What is the area of a rectangle with length 2 and width 4?",2,8
+"What is the length of the hypotenuse of a right triangle with legs 5 and 12?",2,13
+"What multiple of pi is the area of a circle with radius 2?",2,4
+"What is the perimeter of a square with side length 3?",2,12
+"What is the perimeter of a rectangle with length 2 and width 5?",2,14
+"What is the area of a right triangle with legs 6 and 8?",2,24
+"What multiple of pi is the circumference of a circle with radius 3?",2,6
+"What is the area of a square with side length 3?",2,9
+"What is the area of a rectangle with length 2 and width 5?",2,10
+"What is the length of the hypotenuse of a right triangle with legs 6 and 8?",2,10
+"What multiple of pi is the area of a circle with radius 3?",2,9
+"What is the perimeter of a square with side length 4?",2,16
+"What is the perimeter of a rectangle with length 2 and width 6?",2,16
+"What is the area of a right triangle with legs 9 and 12?",2,54
+"What multiple of pi is the circumference of a circle with radius 4?",2,8
+"What is the area of a square with side length 4?",2,16
+"What is the area of a rectangle with length 2 and width 6?",2,12
+"What is the length of the hypotenuse of a right triangle with legs 9 and 12?",2,15
+"What multiple of pi is the area of a circle with radius 4?",2,16
+"What is the perimeter of a square with side length 5?",2,20
+"What is the perimeter of a rectangle with length 2 and width 7?",2,18
+"What is the area of a right triangle with legs 8 and 15?",2,60
+"What multiple of pi is the circumference of a circle with radius 5?",2,10
+"What is the area of a square with side length 5?",2,25
+"What is the area of a rectangle with length 2 and width 7?",2,14
+"What is the length of the hypotenuse of a right triangle with legs 8 and 15?",2,17
+"What multiple of pi is the area of a circle with radius 5?",2,25
+"What is the perimeter of a square with side length 6?",2,24
+"What is the perimeter of a rectangle with length 2 and width 8?",2,20
+"What multiple of pi is the circumference of a circle with radius 6?",2,12
+"What is the area of a square with side length 6?",2,36
+"What is the area of a rectangle with length 2 and width 8?",2,16
+"What multiple of pi is the area of a circle with radius 6?",2,36
+"What is the perimeter of a square with side length 7?",2,28
+"What is the perimeter of a rectangle with length 2 and width 9?",2,22
+"What multiple of pi is the circumference of a circle with radius 7?",2,14
+"What is the area of a square with side length 7?",2,49
+"What is the area of a rectangle with length 2 and width 9?",2,18
+"What multiple of pi is the area of a circle with radius 7?",2,49
+"What is the perimeter of a square with side length 8?",2,32
+"What is the perimeter of a rectangle with length 2 and width 10?",2,24
+"What multiple of pi is the circumference of a circle with radius 8?",2,16
+"What is the area of a square with side length 8?",2,64
+"What is the area of a rectangle with length 2 and width 10?",2,20
+"What multiple of pi is the area of a circle with radius 8?",2,64
+"What is the perimeter of a square with side length 9?",2,36
+"What is the perimeter of a rectangle with length 2 and width 11?",2,26
+"What multiple of pi is the circumference of a circle with radius 9?",2,18
+"What is the area of a square with side length 9?",2,81
+"What is the area of a rectangle with length 2 and width 11?",2,22
+"What multiple of pi is the area of a circle with radius 9?",2,81
+"What is the perimeter of a square with side length 10?",2,40
+"What is the perimeter of a rectangle with length 2 and width 12?",2,28
+"What multiple of pi is the circumference of a circle with radius 10?",2,20
+"What is the area of a square with side length 10?",2,100
+"What is the area of a rectangle with length 2 and width 12?",2,24
+"What multiple of pi is the area of a circle with radius 10?",2,100
+"What is the perimeter of a square with side length 11?",2,44
+"What is the perimeter of a rectangle with length 2 and width 13?",2,30
+"What multiple of pi is the circumference of a circle with radius 11?",2,22
+"What is the area of a square with side length 11?",2,121
+"What is the area of a rectangle with length 2 and width 13?",2,26
+"What multiple of pi is the area of a circle with radius 11?",2,121
+"What is the perimeter of a square with side length 12?",2,48
+"What is the perimeter of a rectangle with length 2 and width 14?",2,32
+"What multiple of pi is the circumference of a circle with radius 12?",2,24
+"What is the area of a square with side length 12?",2,144
+"What is the area of a rectangle with length 2 and width 14?",2,28
+"What multiple of pi is the area of a circle with radius 12?",2,144
+"What is the perimeter of a square with side length 13?",2,52
+"What is the perimeter of a rectangle with length 2 and width 15?",2,34
+"What multiple of pi is the circumference of a circle with radius 13?",2,26
+"What is the area of a square with side length 13?",2,169
+"What is the area of a rectangle with length 2 and width 15?",2,30
+"What multiple of pi is the area of a circle with radius 13?",2,169
+"What is the perimeter of a square with side length 14?",2,56
+"What is the perimeter of a rectangle with length 2 and width 16?",2,36
+"What multiple of pi is the circumference of a circle with radius 14?",2,28
+"What is the area of a square with side length 14?",2,196
+"What is the area of a rectangle with length 2 and width 16?",2,32
+"What multiple of pi is the area of a circle with radius 14?",2,196
+"What is the perimeter of a square with side length 15?",2,60
+"What is the perimeter of a rectangle with length 2 and width 17?",2,38
+"What multiple of pi is the circumference of a circle with radius 15?",2,30
+"What is the area of a square with side length 15?",2,225
+"What is the area of a rectangle with length 2 and width 17?",2,34
+"What multiple of pi is the area of a circle with radius 15?",2,225
+"What is the volume of a cube with edge length 1?",3,1
+"What is the volume of a rectangular prism with length 1, width 1, and height 1?",3,1
+"What is the volume of a pyramid with base area 12 and height 3?",3,12
+"What multiple of pi is the surface area of a sphere with radius 1?",3,4
+"What is the surface area of a cube with edge length 1?",3,6
+"What is the surface area of a rectangular prism with length 1, width 1, and height 1?",3,6
+"What is the volume of a pyramid with base area 12 and height 6?",3,24
+"What multiple of pi is the surface area of a sphere with radius 2?",3,16
+"What is the volume of a cube with edge length 2?",3,8
+"What is the volume of a rectangular prism with length 1, width 1, and height 2?",3,2
+"What is the volume of a pyramid with base area 12 and height 9?",3,36
+"What multiple of pi is the surface area of a sphere with radius 3?",3,36
+"What is the surface area of a cube with edge length 2?",3,24
+"What is the surface area of a rectangular prism with length 1, width 1, and height 2?",3,10
+"What is the volume of a pyramid with base area 24 and height 3?",3,24
+"What multiple of pi is the volume of a sphere with radius 3?",3,36
+"What is the volume of a cube with edge length 3?",3,27
+"What is the volume of a rectangular prism with length 1, width 1, and height 3?",3,3
+"What is the volume of a pyramid with base area 24 and height 6?",3,48
+"What multiple of pi is the surface area of a sphere with radius 4?",3,64
+"What is the surface area of a cube with edge length 3?",3,54
+"What is the surface area of a rectangular prism with length 1, width 1, and height 3?",3,14
+"What is the volume of a pyramid with base area 24 and height 9?",3,72
+"What multiple of pi is the surface area of a sphere with radius 5?",3,100
+"What is the volume of a cube with edge length 4?",3,64
+"What is the volume of a rectangular prism with length 1, width 1, and height 4?",3,4
+"What is the volume of a pyramid with base area 36 and height 3?",3,36
+"What multiple of pi is the surface area of a sphere with radius 6?",3,144
+"What is the surface area of a cube with edge length 4?",3,96
+"What is the surface area of a rectangular prism with length 1, width 1, and height 4?",3,18
+"What is the volume of a pyramid with base area 36 and height 6?",3,72
+"What multiple of pi is the volume of a sphere with radius 6?",3,288
+"What is the volume of a cube with edge length 5?",3,125
+"What is the volume of a rectangular prism with length 1, width 1, and height 5?",3,5
+"What is the volume of a pyramid with base area 36 and height 9?",3,108
+"What multiple of pi is the surface area of a sphere with radius 7?",3,196
+"What is the surface area of a cube with edge length 5?",3,150
+"What is the surface area of a rectangular prism with length 1, width 1, and height 5?",3,22
+"What is the volume of a pyramid with base area 48 and height 3?",3,48
+"What multiple of pi is the surface area of a sphere with radius 8?",3,256
+"What is the volume of a cube with edge length 6?",3,216
+"What is the volume of a rectangular prism with length 1, width 1, and height 6?",3,6
+"What is the volume of a pyramid with base area 48 and height 6?",3,96
+"What multiple of pi is the surface area of a sphere with radius 9?",3,324
+"What is the surface area of a cube with edge length 6?",3,216
+"What is the surface area of a rectangular prism with length 1, width 1, and height 6?",3,26
+"What is the volume of a pyramid with base area 48 and height 9?",3,144
+"What multiple of pi is the volume of a sphere with radius 9?",3,972
+"What is the volume of a cube with edge length 7?",3,343
+"What is the volume of a rectangular prism with length 1, width 1, and height 7?",3,7
+"What multiple of pi is the surface area of a sphere with radius 10?",3,400
+"What is the surface area of a cube with edge length 7?",3,294
+"What is the surface area of a rectangular prism with length 1, width 1, and height 7?",3,30
+"What multiple of pi is the surface area of a sphere with radius 11?",3,484
+"What is the volume of a cube with edge length 8?",3,512
+"What is the volume of a rectangular prism with length 1, width 1, and height 8?",3,8
+"What multiple of pi is the surface area of a sphere with radius 12?",3,576
+"What is the surface area of a cube with edge length 8?",3,384
+"What is the surface area of a rectangular prism with length 1, width 1, and height 8?",3,34
+"What multiple of pi is the volume of a sphere with radius 12?",3,2304
+"What is the volume of a cube with edge length 9?",3,729
+"What is the volume of a rectangular prism with length 1, width 1, and height 9?",3,9
+"What multiple of pi is the surface area of a sphere with radius 13?",3,676
+"What is the surface area of a cube with edge length 9?",3,486
+"What is the surface area of a rectangular prism with length 1, width 1, and height 9?",3,38
+"What multiple of pi is the surface area of a sphere with radius 14?",3,784
+"What is the volume of a cube with edge length 10?",3,1000
+"What is the volume of a rectangular prism with length 1, width 2, and height 2?",3,4
+"What multiple of pi is the surface area of a sphere with radius 15?",3,900
+"What is the surface area of a cube with edge length 10?",3,600
+"What is the surface area of a rectangular prism with length 1, width 2, and height 2?",3,16
+"What multiple of pi is the volume of a sphere with radius 15?",3,4500
+"What is the volume of a cube with edge length 11?",3,1331
+"What is the length of the space diagonal of a rectangular prism with length 1, width 2, and height 2?",3,3
+"What multiple of pi is the surface area of a sphere with radius 16?",3,1024
+"What is the surface area of a cube with edge length 11?",3,726
+"What is the volume of a rectangular prism with length 1, width 2, and height 3?",3,6
+"What multiple of pi is the surface area of a sphere with radius 17?",3,1156
+"What is the volume of a cube with edge length 12?",3,1728
+"What is the surface area of a rectangular prism with length 1, width 2, and height 3?",3,22
+"What multiple of pi is the surface area of a sphere with radius 18?",3,1296
+"What is the surface area of a cube with edge length 12?",3,864
+"What is the volume of a rectangular prism with length 1, width 2, and height 4?",3,8
+"What multiple of pi is the volume of a sphere with radius 18?",3,7776
+"What is the volume of a cube with edge length 13?",3,2197
+"What is the surface area of a rectangular prism with length 1, width 2, and height 4?",3,28
+"What multiple of pi is the surface area of a sphere with radius 19?",3,1444
+"What is the surface area of a cube with edge length 13?",3,1014
+"What is the volume of a rectangular prism with length 1, width 2, and height 5?",3,10
+"What is the volume of a cube with edge length 14?",3,2744
+"What is the surface area of a rectangular prism with length 1, width 2, and height 5?",3,34
+"What is the surface area of a cube with edge length 14?",3,1176
+"What is the volume of a rectangular prism with length 1, width 2, and height 6?",3,12
+"What is the surface area of a rectangular prism with length 1, width 2, and height 6?",3,40
+"What is the volume of a rectangular prism with length 1, width 2, and height 7?",3,14
+"What is the surface area of a rectangular prism with length 1, width 2, and height 7?",3,46
+"What is the volume of a rectangular prism with length 1, width 2, and height 8?",3,16
+"What is the surface area of a rectangular prism with length 1, width 2, and height 8?",3,52
+"What is the volume of a rectangular prism with length 1, width 2, and height 9?",3,18
+"What is the surface area of a rectangular prism with length 1, width 2, and height 9?",3,58
+"What is the hyper-volume of a tesseract with edge length 1?",4,1
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 1?",4,1
+"What is the hyper-volume of a 4-simplex with base volume 24 and height 2?",4,12
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 1?",4,2
+"What is the hyper-surface volume of a tesseract with edge length 1?",4,8
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 1?",4,8
+"What is the hyper-volume of a 4-simplex with base volume 24 and height 4?",4,24
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 2?",4,16
+"What is the hyper-volume of a tesseract with edge length 2?",4,16
+"What is the length of the 4D diagonal of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 1?",4,2
+"What is the hyper-volume of a 4-simplex with base volume 24 and height 6?",4,36
+"What multiple of pi^2 is the hyper-volume of a 3-sphere with radius 2?",4,8
+"What is the hyper-surface volume of a tesseract with edge length 2?",4,64
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 2?",4,2
+"What is the hyper-volume of a 4-simplex with base volume 24 and height 8?",4,48
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 3?",4,54
+"What is the hyper-volume of a tesseract with edge length 3?",4,81
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 2?",4,14
+"What is the hyper-volume of a 4-simplex with base volume 48 and height 2?",4,24
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 4?",4,128
+"What is the hyper-surface volume of a tesseract with edge length 3?",4,216
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 3?",4,3
+"What is the hyper-volume of a 4-simplex with base volume 48 and height 4?",4,48
+"What multiple of pi^2 is the hyper-volume of a 3-sphere with radius 4?",4,128
+"What is the hyper-volume of a tesseract with edge length 4?",4,256
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 3?",4,20
+"What is the hyper-volume of a 4-simplex with base volume 48 and height 6?",4,72
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 5?",4,250
+"What is the hyper-surface volume of a tesseract with edge length 4?",4,512
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 4?",4,4
+"What is the hyper-volume of a 4-simplex with base volume 48 and height 8?",4,96
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 6?",4,432
+"What is the hyper-volume of a tesseract with edge length 5?",4,625
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 4?",4,26
+"What is the hyper-volume of a 4-simplex with base volume 72 and height 2?",4,36
+"What multiple of pi^2 is the hyper-volume of a 3-sphere with radius 6?",4,648
+"What is the hyper-surface volume of a tesseract with edge length 5?",4,1000
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 5?",4,5
+"What is the hyper-volume of a 4-simplex with base volume 72 and height 4?",4,72
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 7?",4,686
+"What is the hyper-volume of a tesseract with edge length 6?",4,1296
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 1, and depth 5?",4,32
+"What is the hyper-volume of a 4-simplex with base volume 72 and height 6?",4,108
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 8?",4,1024
+"What is the hyper-surface volume of a tesseract with edge length 6?",4,1728
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 2, and depth 2?",4,4
+"What is the hyper-volume of a 4-simplex with base volume 72 and height 8?",4,144
+"What multiple of pi^2 is the hyper-volume of a 3-sphere with radius 8?",4,2048
+"What is the hyper-volume of a tesseract with edge length 7?",4,2401
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 2, and depth 2?",4,24
+"What is the hyper-volume of a 4-simplex with base volume 96 and height 2?",4,48
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 9?",4,1458
+"What is the hyper-surface volume of a tesseract with edge length 7?",4,2744
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 2, and depth 3?",4,6
+"What is the hyper-volume of a 4-simplex with base volume 96 and height 4?",4,96
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 10?",4,2000
+"What is the hyper-volume of a tesseract with edge length 8?",4,4096
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 2, and depth 3?",4,34
+"What is the hyper-volume of a 4-simplex with base volume 96 and height 6?",4,144
+"What multiple of pi^2 is the hyper-volume of a 3-sphere with radius 10?",4,5000
+"What is the hyper-surface volume of a tesseract with edge length 8?",4,4096
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 2, and depth 4?",4,8
+"What is the hyper-volume of a 4-simplex with base volume 96 and height 8?",4,192
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 11?",4,2662
+"What is the hyper-volume of a tesseract with edge length 9?",4,6561
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 2, and depth 4?",4,44
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 12?",4,3456
+"What is the hyper-surface volume of a tesseract with edge length 9?",4,5832
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 2, and depth 5?",4,10
+"What multiple of pi^2 is the hyper-volume of a 3-sphere with radius 12?",4,10368
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 2, and depth 5?",4,54
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 13?",4,4394
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 3, and depth 3?",4,9
+"What multiple of pi^2 is the hyper-surface volume of a 3-sphere with radius 14?",4,5488
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 3, and depth 3?",4,48
+"What multiple of pi^2 is the hyper-volume of a 3-sphere with radius 14?",4,19208
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 3, and depth 4?",4,12
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 3, and depth 4?",4,62
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 3, and depth 5?",4,15
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 3, and depth 5?",4,76
+"What is the length of the 4D diagonal of a rectangular 4-parallelotope with length 1, width 1, height 3, and depth 5?",4,6
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 4, and depth 4?",4,16
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 4, and depth 4?",4,80
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 4, and depth 5?",4,20
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 4, and depth 5?",4,98
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 1, height 5, and depth 5?",4,25
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 1, height 5, and depth 5?",4,120
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 2, height 2, and depth 2?",4,8
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 2, height 2, and depth 2?",4,40
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 2, height 2, and depth 3?",4,12
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 2, height 2, and depth 3?",4,56
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 2, height 2, and depth 4?",4,16
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 2, height 2, and depth 4?",4,72
+"What is the length of the 4D diagonal of a rectangular 4-parallelotope with length 1, width 2, height 2, and depth 4?",4,5
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 2, height 2, and depth 5?",4,20
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 2, height 2, and depth 5?",4,88
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 2, height 3, and depth 3?",4,18
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 2, height 3, and depth 3?",4,78
+"What is the hyper-volume of a rectangular 4-parallelotope with length 1, width 2, height 3, and depth 4?",4,24
+"What is the hyper-surface volume of a rectangular 4-parallelotope with length 1, width 2, height 3, and depth 4?",4,100

@@ -17,6 +17,42 @@ question,dimension,answer
 "What is the number of faces in a square?",2,1
 "What is the number of faces in a cube?",3,6
 "What is the number of faces in a tesseract?",4,24
+"How many vertices does a triangle have?",2,3
+"How many vertices does a triangular pyramid have?",3,4
+"How many vertices does a 4-simplex have?",4,5
+"How many vertices does a square have?",2,4
+"How many vertices does a cube have?",3,8
+"How many vertices does a tesseract have?",4,16
+"How many edges does a triangle have?",2,3
+"How many edges does a triangular pyramid have?",3,6
+"How many edges does a 4-simplex have?",4,10
+"How many edges does a square have?",2,4
+"How many edges does a cube have?",3,12
+"How many edges does a tesseract have?",4,32
+"How many faces does a triangle have?",2,1
+"How many faces does a triangular pyramid have?",3,4
+"How many faces does a 4-simplex have?",4,10
+"How many faces does a square have?",2,1
+"How many faces does a cube have?",3,6
+"How many faces does a tesseract have?",4,24
+"What is the vertex count of a triangle?",2,3
+"What is the vertex count of a triangular pyramid?",3,4
+"What is the vertex count of a 4-simplex?",4,5
+"What is the vertex count of a square?",2,4
+"What is the vertex count of a cube?",3,8
+"What is the vertex count of a tesseract?",4,16
+"What is the edge count of a triangle?",2,3
+"What is the edge count of a triangular pyramid?",3,6
+"What is the edge count of a 4-simplex?",4,10
+"What is the edge count of a square?",2,4
+"What is the edge count of a cube?",3,12
+"What is the edge count of a tesseract?",4,32
+"What is the face count of a triangle?",2,1
+"What is the face count of a triangular pyramid?",3,4
+"What is the face count of a 4-simplex?",4,10
+"What is the face count of a square?",2,1
+"What is the face count of a cube?",3,6
+"What is the face count of a tesseract?",4,24
 "What is the perimeter of a equilateral triangle with side length 6?",2,18
 "What is the surface area of a regular triangular pyramid whose faces are equilateral triangles with areas of 6?",3,24
 "What is the hyper-surface volume of a regular 4-simplex whose boundary is made of regular triangular pyramids with volume of 6?",4,30
