@@ -8,40 +8,75 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from openai import AzureOpenAI
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from collections import OrderedDict
+from vllm import LLM, SamplingParams
+import argparse
+import sys
 
 # -------------------------------------------------------------
 # Prompt definitions
 # -------------------------------------------------------------
-prelude_explanation = """
+prelude_explanations ={
+"with_reasoning": """
+You are evaluating a multiple-choice geometry question.
+You may think step-by-step and output your full reasoning.
+After your reasoning, you MUST output the final answer in the format:
+<final_answer>A</final_answer>
+where A is one of {choices}.
+Nothing else should appear inside <final_answer> tags.
+Question:
+""",
+"without_reasoning":
+"""
 You are evaluating a multiple-choice geometry question.
 You MUST output the final answer in the format:
 <final_answer>A</final_answer>
 where A is one of {choices}.
 Nothing else should appear inside <final_answer> tags.
 Question:
-"""
+""",
+}
 
+postlude_explanations = {
+"with_reasoning":
+"""
+Explain your reasoning, then output the answer tag on the last line.
+""",
+"without_reasoning":
+"""
+Output the answer tag on the last line.
+"""
+}
 options = [
     "\nAnswer choices: A. Parallel B. Perpendicular C. Neither parallel nor perpendicular D. Cannot be inferred",
     "\nAnswer choices: A. Intersecting B. Not intersecting C. Cannot be inferred",
     "\nAnswer choices: A. Yes B. No C. Cannot be inferred",
 ]
 
-postlude_explanation = """
-Output the answer tag on the last line.
-"""
+
 
 # Prelude for numeric (integer) questions — no choices shown
-numeric_prelude = """
+numeric_preludes = {
+    "with_reasoning": """
 You are evaluating a numeric geometry question.
-Show your reasoning if helpful, and then output the final numeric answer only
-inside a <final_answer>...</final_answer> tag on the last line.
+You may think step-by-step and output your full reasoning.
+After your reasoning, you MUST output the final answer in the format:
+<final_answer>...</final_answer>
+where ... is the numeric answer.
+If the answer is a multiple of π or π^2, output the numeric multiplier (e.g. 12 for 12π).
+Do not include units or explanatory text inside the tags.
+Question:
+""",
+    "without_reasoning": """
+You are evaluating a numeric geometry question.
+You MUST output the final answer in the format:
+<final_answer>...</final_answer>
+where ... is the numeric answer.
 If the answer is a multiple of π or π^2, output the numeric multiplier (e.g. 12 for 12π).
 Do not include units or explanatory text inside the tags.
 Question:
 """
+}
 
 # -------------------------------------------------------------
 # Utility: prompt builders
@@ -52,8 +87,14 @@ def _derive_choices_text(opt: str) -> str:
     return ", ".join(letters) if letters else "A, B, C, D, E"
 
 
-def make_prompt_mc(question: str, type_key: str) -> str:
+def make_prompt_mc(question: str, type_key: str, reasoning: bool = True) -> str:
     """Build a multiple-choice prompt for the given type."""
+    if reasoning:
+        prelude_explanation = prelude_explanations["with_reasoning"]
+        postlude_explanation = postlude_explanations["with_reasoning"]
+    else:
+        prelude_explanation = prelude_explanations["without_reasoning"]
+        postlude_explanation = postlude_explanations["without_reasoning"]
     try:
         idx = int(type_key) - 1
     except Exception:
@@ -64,7 +105,12 @@ def make_prompt_mc(question: str, type_key: str) -> str:
     return prelude_explanation.format(choices=choices) + question + opt + postlude_explanation
 
 
-def make_prompt_numeric(question: str) -> str:
+def make_prompt_numeric(question: str, reasoning: bool = True) -> str:
+    """Build a numeric prompt."""
+    if reasoning:
+        numeric_prelude = numeric_preludes["with_reasoning"]
+    else:
+        numeric_prelude = numeric_preludes["without_reasoning"]
     return numeric_prelude + "\n" + question
 
 
@@ -87,10 +133,6 @@ def chat(
     batch_size: int = 8,
     max_new_tokens: int = 256,
 ) -> List[str]:
-    """Send a list of prompts to the model and return responses.
-    If `model` is provided, use the local HF model in batches; otherwise use
-    the AzureOpenAI client.
-    """
     responses: List[str] = []
 
     if model is None:
@@ -103,7 +145,25 @@ def chat(
                     {"role": "user", "content": prompt},
                 ],
             )
-            responses.append(response.choices[0].message.content.strip())
+            # AzureOpenAI client may return different shapes depending on SDK/version:
+            # - an object with .choices[0].message.content
+            # - a dict-like with ['choices'][0]['message']['content']
+            # - sometimes a plain string
+            content = None
+            try:
+                # Try attribute-style access first
+                content = response.choices[0].message.content.strip()
+            except Exception:
+                try:
+                    # Try dict-like access
+                    content = response["choices"][0]["message"]["content"].strip()
+                except Exception:
+                    # Fallback to str() of response
+                    try:
+                        content = str(response).strip()
+                    except Exception:
+                        content = ""
+            responses.append(content)
         return responses
 
     # Local model path: run in batches to avoid huge memory usage
@@ -118,39 +178,81 @@ def chat(
         device = getattr(model, "device", torch.device("cpu"))
 
     batch_num = (len(prompts) + batch_size - 1) // batch_size
+
     for i in range(batch_num):
         batch_prompts = prompts[i * batch_size : (i + 1) * batch_size]
-        inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True)
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        try:
-            outputs = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-        except RuntimeError as e:
-            err = str(e).lower()
-            if "out of memory" in err or "cuda out of memory" in err:
-                try:
-                    torch.cuda.empty_cache()
-                except Exception:
-                    pass
-                try:
-                    outputs = model.generate(
-                        **inputs,
-                        max_new_tokens=max(32, max_new_tokens // 4),
-                        do_sample=False,
-                        use_cache=False,
-                    )
-                except Exception:
-                    outputs = None
+        # Handle vllm LLM instances separately (they expect raw prompts)
+        if isinstance(model, LLM):
+            try:
+                sampling_params = SamplingParams(
+                    temperature=0.0, top_p=1.0, top_k=0, max_tokens=max_new_tokens
+                )
+                # vLLM accepts a sequence of prompt strings and returns a list of RequestOutput
+                outputs = model.generate(batch_prompts, sampling_params=sampling_params, use_tqdm=False)
+            except RuntimeError as e:
+                err = str(e).lower()
+                if "out of memory" in err or "cuda out of memory" in err:
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    try:
+                        sampling_params = SamplingParams(
+                            temperature=0.0, top_p=1.0, top_k=0, max_tokens=max(32, max_new_tokens // 4)
+                        )
+                        outputs = model.generate(batch_prompts, sampling_params=sampling_params, use_tqdm=False)
+                    except Exception:
+                        outputs = None
+                else:
+                    raise
+
+            if outputs is None:
+                batch_responses = ["" for _ in batch_prompts]
             else:
-                raise
-        if outputs is None:
-            batch_responses = ["" for _ in batch_prompts]
+                batch_responses = []
+                for prompt, req_out in zip(batch_prompts, outputs):
+                    # concatenate all completion outputs for this request
+                    try:
+                        text = "".join([c.text for c in req_out.outputs])
+                    except Exception:
+                        # best-effort fallback
+                        text = getattr(req_out, "prompt", "") or ""
+                    # strip prompt prefix if echoed
+                    if prompt and text.startswith(prompt):
+                        text = text[len(prompt) :].strip()
+                    batch_responses.append(text.strip())
         else:
-            batch_responses = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            # remove the input part from the response (best-effort)
-            batch_responses = [
-                resp[len(prompt) :].strip() if resp.startswith(prompt) else resp.strip()
-                for resp, prompt in zip(batch_responses, batch_prompts)
-            ]
+            inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True)
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            try:
+                outputs = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+            except RuntimeError as e:
+                err = str(e).lower()
+                if "out of memory" in err or "cuda out of memory" in err:
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    try:
+                        outputs = model.generate(
+                            **inputs,
+                            max_new_tokens=max(32, max_new_tokens // 4),
+                            do_sample=False,
+                            use_cache=False,
+                        )
+                    except Exception:
+                        outputs = None
+                else:
+                    raise
+            if outputs is None:
+                batch_responses = ["" for _ in batch_prompts]
+            else:
+                batch_responses = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+                # remove the input part from the response (best-effort)
+                batch_responses = [
+                    resp[len(prompt) :].strip() if resp.startswith(prompt) else resp.strip()
+                    for resp, prompt in zip(batch_responses, batch_prompts)
+                ]
         responses.extend(batch_responses)
     return responses
 
@@ -227,13 +329,15 @@ def _normalize_label(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", (s or "")).upper()
 
 
-# Global timestamp for all runs in this session
+# Global timestamp for all runs in this session (can be overridden by CLI)
 _RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+# Base results directory (can be overridden by CLI)
+RESULTS_ROOT = "results"
 
 
 def _ensure_dirs(model_name: str) -> Tuple[str, str]:
     model_name = model_name.replace("/", "_")
-    output_dir = os.path.join("results", _RUN_TIMESTAMP, model_name)
+    output_dir = os.path.join(RESULTS_ROOT, _RUN_TIMESTAMP, model_name)
     os.makedirs(output_dir, exist_ok=True)
     return output_dir, os.path.join(output_dir, "results.text")
 
@@ -245,12 +349,14 @@ def evaluate(
     tokenizer=None,
     batch_size: int = 8,
     max_new_tokens: int = 256,
+    reasoning: bool = True,
 ):
     """Evaluate model by `type` groups (multiple-choice) and numeric, save per-type materials.
     Returns the overall accuracy across all types (including numeric).
     """
     output_dir, result_path = _ensure_dirs(model_name or "model")
-    csv_path = "data/questions.csv"
+    csv_path = "data/questions_augmented.csv"
+    # csv_path = "data/questions.csv"
     log_path = os.path.join(output_dir, f"dim_{dim}.log")
 
     # Build per-type dataset from questions.csv
@@ -267,12 +373,13 @@ def evaluate(
             raw_answer = (row.get("answer") or "").strip()
             type_key = (row.get("type") or "unknown").strip() or "unknown"
             per_type_data.setdefault(type_key, {"prompts": [], "answers": [], "rows": []})
-            per_type_data[type_key]["prompts"].append(make_prompt_mc(question, type_key))
+            per_type_data[type_key]["prompts"].append(make_prompt_mc(question, type_key, reasoning=reasoning))
             per_type_data[type_key]["answers"].append(raw_answer)
             per_type_data[type_key]["rows"].append(row)
 
     # add numeric from data/numeric.csv as its own type: "numeric"
-    numeric_path = "data/numeric.csv"
+    numeric_path = "data/numeric_augmented.csv"
+    # numeric_path = "data/numeric.csv"
     if os.path.exists(numeric_path):
         with open(numeric_path, "r", encoding="utf-8") as nf:
             nreader = csv.DictReader(nf)
@@ -288,7 +395,7 @@ def evaluate(
                 if not q or not ans:
                     continue
                 per_type_data.setdefault("numeric", {"prompts": [], "answers": [], "rows": []})
-                per_type_data["numeric"]["prompts"].append(make_prompt_numeric(q))
+                per_type_data["numeric"]["prompts"].append(make_prompt_numeric(q, reasoning=reasoning))
                 per_type_data["numeric"]["answers"].append(ans)
                 per_type_data["numeric"]["rows"].append(row)
 
@@ -425,10 +532,46 @@ def evaluate(
 # Entrypoint
 # -------------------------------------------------------------
 if __name__ == "__main__":
-    model_names = ["Qwen/Qwen2.5-7B-Instruct","Qwen/Qwen2.5-Math-7B-Instruct","gpt-4o","gpt-4o-mini","o1","gpt-5","google/gemma-2-9b-it","meta-llama/Llama-3.1-8B"]
-    # model_names = ["Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-Math-7B-Instruct"]
-    # model_names = ["gpt-4o", "gpt-4o-mini", "o1", "gpt-5"]
-    # model_names = ["google/gemma-2-9b-it","meta-llama/Llama-3.1-8B"]
+    parser = argparse.ArgumentParser(description="Evaluate models on geometry dataset using vLLM or Azure OpenAI.")
+    parser.add_argument("--models", type=str, help="Comma-separated model names to evaluate (default: built-in list)")
+    parser.add_argument("--dims", type=str, default="2", help="Comma-separated dimensions to evaluate (default: 2)")
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size for local generation")
+    parser.add_argument("--max-new-tokens", type=int, default=1024, help="Max new tokens to generate per prompt")
+    parser.add_argument("--dtype", type=str, default="float16", help="Preferred dtype for vLLM local models: float16|bfloat16|float32")
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.7, help="GPU memory utilization fraction for vLLM")
+    parser.add_argument("--no-reasoning", action="store_true", help="Disable chain-of-thought reasoning prompts")
+    parser.add_argument("--results-root", type=str, default=RESULTS_ROOT, help="Base directory to write results into")
+    parser.add_argument("--timestamp", type=str, default=None, help="Timestamp string to use for this run (default: now)")
+    args = parser.parse_args()
+
+    # default model list (kept for backwards compatibility)
+    default_models = [
+        "Qwen/Qwen2.5-7B-Instruct",
+        "Qwen/Qwen2.5-Math-7B-Instruct",
+        "google/gemma-2-9b-it",
+        "meta-llama/Llama-3.1-8B",
+        "gpt-4o",
+        "gpt-4o-mini",
+        "o1",
+    ]
+
+    # configure globals from args
+    if args.timestamp:
+        try:
+            # simple validation: must be digits and underscores
+            _ = str(args.timestamp)
+            globals()["_RUN_TIMESTAMP"] = args.timestamp
+        except Exception:
+            print("Invalid timestamp provided; using default.", file=sys.stderr)
+    globals()["RESULTS_ROOT"] = args.results_root
+
+    if args.models:
+        model_names = [m.strip() for m in args.models.split(",") if m.strip()]
+    else:
+        model_names = default_models
+
+    dims = [int(d.strip()) for d in args.dims.split(",") if d.strip()]
+    reasoning = not args.no_reasoning
 
     for model_name in model_names:
         output_dir, result_path = _ensure_dirs(model_name)
@@ -436,43 +579,53 @@ if __name__ == "__main__":
         with open(result_path, "w", encoding="utf-8") as _rf:
             _rf.write("")
 
-        for dims in [2, 3, 4]:
-            print(f"Evaluating {model_name} for {dims} dimensions...")
+        for dim in dims:
+            print(f"Evaluating {model_name} for {dim} dimensions...")
             model = None
-            tokenizer = None
-            # Load local HF model if not using Azure OpenAI
+            # Use Azure for hosted models, otherwise try to load local vLLM
             if model_name not in ["gpt-4o", "gpt-4o-mini", "o1", "gpt-5"]:
-                tokenizer = AutoTokenizer.from_pretrained(model_name)
-                tokenizer.padding_side = "left"
-                # Ensure both pad token and its id are set to eos equivalents
-                if tokenizer.pad_token is None or getattr(tokenizer, "pad_token_id", None) is None:
-                    tokenizer.pad_token = tokenizer.eos_token
-                    tokenizer.pad_token_id = tokenizer.eos_token_id
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_name, device_map="auto", torch_dtype=torch.float16
-                )
-                # Disable sampling parameters if present
-                gc = model.generation_config
-                for k in ["temperature", "top_p", "top_k"]:
-                    if hasattr(gc, k):
-                        setattr(gc, k, None)
-                model.generation_config = gc
+                preferred_dtype = getattr(args, "dtype", "float16")
+                gpu_mem_util = getattr(args, "gpu_memory_utilization", 0.7)
+                # Build a list of dtype candidates to try; prefer user choice but
+                # fall back to bfloat16/float32 if the model complains about float16.
+                tried = []
+                if preferred_dtype == "float16":
+                    dtype_candidates = ["float16", "bfloat16", "float32"]
+                elif preferred_dtype == "bfloat16":
+                    dtype_candidates = ["bfloat16", "float32"]
+                else:
+                    dtype_candidates = [preferred_dtype, "float32"]
+
+                last_exc = None
+                for dt in dtype_candidates:
+                    try:
+                        model = LLM(model=model_name, dtype=dt, gpu_memory_utilization=gpu_mem_util, disable_log_stats=True)
+                        break
+                    except Exception as e:
+                        last_exc = e
+                        msg = str(e).lower()
+                        # If the model specifically rejects float16, continue to next candidate
+                        if "does not support float16" in msg or "does not support bfloat16" in msg or "numerical instability" in msg:
+                            continue
+                        # otherwise, stop trying and surface the error
+                        model = None
+                        break
+                if model is None and last_exc is not None:
+                    print(f"Warning: could not initialize vLLM for {model_name}: {last_exc}", file=sys.stderr)
 
             evaluate(
-                dims,
+                dim,
                 model_name=model_name,
                 model=model,
-                tokenizer=tokenizer,
-                max_new_tokens=1024,
+                tokenizer=None,
+                batch_size=args.batch_size,
+                max_new_tokens=args.max_new_tokens,
+                reasoning=reasoning,
             )
 
             # free GPU/CPU resources
             try:
                 del model
-            except Exception:
-                pass
-            try:
-                del tokenizer
             except Exception:
                 pass
             import gc

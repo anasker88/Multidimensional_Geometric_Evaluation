@@ -23,6 +23,8 @@ Evaluate LLM performance on geometry questions across 2D, 3D, and 4D geometric s
 
 #### Scripts Directory (`scripts/`)
 - **`augment_questions.py`** — Dataset augmentation script. Permutes uppercase vertex labels (A–Z, excluding O, I, l, 0) to generate variations of existing questions. Outputs `data/questions_augmented.csv`.
+- **`augment_numeric.py`** — Numeric-question augmentation utilities (creates/augments `data/numeric_augmented.csv`).
+- **`run.sh`** — Example run wrapper (sanitized) to run `evaluate.py` with common options. Contains placeholders for Azure credentials and CUDA device selection.
 
 ---
 
@@ -32,30 +34,56 @@ Evaluate LLM performance on geometry questions across 2D, 3D, and 4D geometric s
 - **`past_results/`** — Archive of previous evaluation runs.
 - **`logs/`** — Log files (if generated).
 - **`__pycache__/`** — Python bytecode cache.
-- **`run.sh`** — Local shell script (excluded to avoid accidentally committing local-specific commands).
+- **`scripts/run.sh`** — Local helper script (sanitized). Keep secrets out of source and update environment variables before use.
 
 ---
 
 ## Usage
-
 ### Running Evaluations
 
+The evaluation script now provides a small CLI. From the repository root you can run the script
+in the `master/` directory:
+
 ```bash
-# if you use GPT models, you need to set your AZURE environment variables first
+# If evaluating hosted Azure models, export your Azure credentials first:
 export AZURE_OPENAI_API_KEY="<your_api_key>"
 export AZURE_OPENAI_ENDPOINT="<your_endpoint>"
 export AZURE_OPENAI_API_VERSION="<your_api_version>"
 
-CUDA_VISIBLE_DEVICES=0 python evaluate.py
+# Run with defaults (built-in model list, 2D):
+python master/evaluate.py
+
+# Evaluate a single local vLLM model for 2D and 3D:
+python master/evaluate.py --models Qwen/Qwen2.5-7B-Instruct --dims 2,3
+
+# Multiple models, custom batch size and token limit:
+python master/evaluate.py --models Qwen/Qwen2.5-7B-Instruct,gpt-4o --dims 2 --batch-size 4 --max-new-tokens 512
+
+# Save results under a custom root and explicit timestamp:
+python master/evaluate.py --results-root my_results --timestamp 20251225_120000
 ```
+
+Notes:
+- Local models specified in `--models` (e.g. `Qwen/...`) are loaded via `vllm.LLM`.
+- Hosted/OpenAI-style models (e.g. `gpt-4o`, `gpt-5`) are queried through the Azure OpenAI client when
+  the script is run without a local `vllm` model for that name. Provide Azure environment variables to enable this.
+
+Key CLI options:
+- `--models`: comma-separated model names to evaluate (default: built-in list in the script)
+- `--dims`: comma-separated dimensions to evaluate (default: `2`)
+- `--batch-size`: batch size for local generation (default: `8`)
+- `--max-new-tokens`: maximum tokens to generate per prompt (default: `1024`)
+- `--no-reasoning`: disable chain-of-thought reasoning prompts
+- `--results-root`: base directory for results (default: `results`)
+- `--timestamp`: override the run timestamp used to name output folders
 
 Results are saved to:
 ```
-results/{timestamp}/{model_name}/
+{results_root}/{timestamp}/{model_name}/
 ├── results.text              # Summary statistics
-├── confusion_matrix_2d.png   # 2D confusion matrices
-├── confusion_matrix_3d.png   # 3D confusion matrices
-└── confusion_matrix_4d.png   # 4D confusion matrices
+├── confusion_matrix_2d.png   # 2D confusion matrices (if applicable)
+├── confusion_matrix_3d.png   # 3D confusion matrices (if applicable)
+└── confusion_matrix_4d.png   # 4D confusion matrices (if applicable)
 ```
 
 ### Augmenting Questions
@@ -79,7 +107,7 @@ This generates `data/questions_augmented.csv` with augmented variants.
 | `past_results/` | ✗ | Archive of previous runs. Local-only for reference. |
 | `logs/` | ✗ | Runtime logs; local debugging only. |
 | `__pycache__/` | ✗ | Python build artifacts; OS-specific. |
-| `run.sh` | ✗ | Local test/debug scripts that may vary per machine. |
+| `scripts/run.sh` | ✗ | Local helper script (contains machine-specific env vars). |
 
 ---
 
