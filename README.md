@@ -96,6 +96,50 @@ This generates `data/questions_augmented.csv` with augmented variants.
 
 ---
 
+## Validating SAE Activations
+
+The validation script loads feature activation tensors produced by `save_activation.py`,
+computes singular features between two dimensions, optionally probes them, and saves
+visualizations of the most active prompts.
+
+```bash
+# Example: compare dim4 vs dim3 and visualize top-10 features (diff + ReasonScore)
+python master/validate.py \
+  --output-dir sae_activations \
+  --model-name google/gemma-2-9b \
+  --layer layer_20 \
+  --singular-dims 4,3 \
+  --singular-method both \
+  --topk 10
+```
+
+Key options:
+- `--prompt-type`: Select prompt style if multiple activation files exist (`with_reasoning`, `without_reasoning`, or `auto`).
+- `--results-dir`: Where to save plots and visualization outputs (default: `output/validate`).
+- `--visualize-topk-sentences`: Number of top prompts per dimension to visualize.
+- `--no-visualize`: Disable visualization output.
+- `--probe-random-samples`: Number of random feature sets for a single aggregated random baseline probe.
+
+Probe behavior:
+- Feature-based probes are reported per method (`diff`, `reason`).
+- Random probe is reported once as `random-baseline` and averaged over multiple random samplings.
+
+Outputs are saved under the results directory, for example. The visualization images
+use per-token activation values for coloring:
+```
+output/validate/
+├── reason_score_rank_dim4_dim3.png
+└── visualize/
+    ├── diff/
+    │   ├── feature_123_rank_1_dim4_dim3.png
+    │   └── feature_123_rank_1_dim4_dim3.json
+    └── reason/
+        ├── feature_456_rank_1_dim4_dim3.png
+        └── feature_456_rank_1_dim4_dim3.json
+```
+
+---
+
 ## File Purposes & Gitignore Rationale
 
 | File/Dir | Git-Tracked | Reason |
