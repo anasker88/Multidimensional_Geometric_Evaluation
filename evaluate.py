@@ -34,6 +34,11 @@ def chat(
     tokenizer=None,
     batch_size: int = 8,
     max_new_tokens: int = 256,
+    do_sample: bool = True,
+    top_k: int = 0,
+    top_p: float = 0.9,
+    temperature: float = 0.1,
+    repetition_penalty: float = 1.1,
 ) -> List[str]:
     responses: List[str] = []
 
@@ -87,7 +92,11 @@ def chat(
         if isinstance(model, LLM):
             try:
                 sampling_params = SamplingParams(
-                    temperature=0.0, top_p=1.0, top_k=0, max_tokens=max_new_tokens
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    repetition_penalty=repetition_penalty,
+                    max_tokens=max_new_tokens,
                 )
                 # vLLM accepts a sequence of prompt strings and returns a list of RequestOutput
                 outputs = model.generate(batch_prompts, sampling_params=sampling_params, use_tqdm=False)
@@ -100,7 +109,11 @@ def chat(
                         pass
                     try:
                         sampling_params = SamplingParams(
-                            temperature=0.0, top_p=1.0, top_k=0, max_tokens=max(32, max_new_tokens // 4)
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            repetition_penalty=repetition_penalty,
+                            max_tokens=max(32, max_new_tokens // 4),
                         )
                         outputs = model.generate(batch_prompts, sampling_params=sampling_params, use_tqdm=False)
                     except Exception:
@@ -127,7 +140,15 @@ def chat(
             inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True)
             inputs = {k: v.to(device) for k, v in inputs.items()}
             try:
-                outputs = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=do_sample,
+                    top_k=top_k if top_k > 0 else None,
+                    top_p=top_p,
+                    temperature=temperature,
+                    repetition_penalty=repetition_penalty,
+                )
             except RuntimeError as e:
                 err = str(e).lower()
                 if "out of memory" in err or "cuda out of memory" in err:
@@ -139,7 +160,11 @@ def chat(
                         outputs = model.generate(
                             **inputs,
                             max_new_tokens=max(32, max_new_tokens // 4),
-                            do_sample=False,
+                            do_sample=do_sample,
+                            top_k=top_k if top_k > 0 else None,
+                            top_p=top_p,
+                            temperature=temperature,
+                            repetition_penalty=repetition_penalty,
                             use_cache=False,
                         )
                     except Exception:
@@ -251,13 +276,20 @@ def evaluate(
     tokenizer=None,
     batch_size: int = 8,
     max_new_tokens: int = 256,
+    do_sample: bool = True,
+    top_k: int = 0,
+    top_p: float = 0.9,
+    temperature: float = 0.1,
+    repetition_penalty: float = 1.1,
     reasoning: bool = True,
+    questions_csv_path: str = "data/questions_augmented.csv",
+    numeric_csv_path: str = "data/numeric_augmented.csv",
 ):
     """Evaluate model by `type` groups (multiple-choice) and numeric, save per-type materials.
     Returns the overall accuracy across all types (including numeric).
     """
     output_dir, result_path = _ensure_dirs(model_name or "model")
-    csv_path = "data/questions_augmented.csv"
+    csv_path = questions_csv_path
     # csv_path = "data/questions.csv"
     log_path = os.path.join(output_dir, f"dim_{dim}.log")
 
@@ -280,7 +312,7 @@ def evaluate(
             per_type_data[type_key]["rows"].append(row)
 
     # add numeric from data/numeric.csv as its own type: "numeric"
-    numeric_path = "data/numeric_augmented.csv"
+    numeric_path = numeric_csv_path
     # numeric_path = "data/numeric.csv"
     if os.path.exists(numeric_path):
         with open(numeric_path, "r", encoding="utf-8") as nf:
@@ -304,6 +336,7 @@ def evaluate(
     total = 0
     total_correct = 0
     per_type_stats: List[Tuple[str, int, int, float]] = []
+    per_question_records: List[Dict[str, str]] = []
 
     with open(log_path, "w", encoding="utf-8") as log_file:
         # sort types, keeping "unknown" last
@@ -335,29 +368,42 @@ def evaluate(
                 tokenizer=tokenizer,
                 batch_size=batch_size,
                 max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+                top_k=top_k,
+                top_p=top_p,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
             )
 
             correct = 0
-            for prompt, response, true_raw in zip(prompts, responses, answers):
+            rows = per_type_data[type_key]["rows"]
+            for prompt, response, true_raw, row in zip(prompts, responses, answers, rows):
                 log_file.write(f"Type: {type_key}\n")
                 log_file.write(f"Question: {prompt}\n")
                 log_file.write(f"Response: {response}\n")
 
                 true_label = _normalize_label(true_raw)
                 pred_label: Optional[str] = None
+                predicted_raw = ""
+                predicted_normalized = ""
+                is_correct = False
 
                 if type_key == "numeric":
                     predicted_num = extract_numeric(response)
+                    predicted_raw = predicted_num or ""
+                    predicted_normalized = predicted_num or ""
                     log_file.write(f"Predicted (raw numeric): {predicted_num}\n")
                     log_file.write(f"Correct (raw numeric): {true_raw}\n\n")
                     if predicted_num is not None:
                         try:
                             if int(predicted_num) == int(re.sub(r"[^0-9\-]", "", str(true_raw))):
                                 correct += 1
+                                is_correct = True
                         except Exception:
                             pass
                 else:
                     predicted = extract_answer(response)
+                    predicted_raw = predicted or ""
                     log_file.write(f"Predicted (raw): {predicted}\n")
                     log_file.write(f"Correct (raw): {true_raw}\n\n")
                     if predicted is not None:
@@ -372,8 +418,10 @@ def evaluate(
                         else:
                             pred_label = pred_alpha
 
+                    predicted_normalized = pred_label or ""
                     if pred_label is not None and true_label == pred_label:
                         correct += 1
+                        is_correct = True
 
                     # fill confusion matrix for MC types
                     if confusion_matrix is not None:
@@ -384,6 +432,28 @@ def evaluate(
                                 confusion_matrix[t_idx, p_idx] += 1
                             else:
                                 confusion_matrix[t_idx, -1] += 1
+
+                if type_key == "numeric":
+                    question_text = (row.get("question") or "").strip()
+                    source_file = numeric_path
+                else:
+                    question_text = (row.get(f"{dim}D") or "").strip()
+                    source_file = csv_path
+
+                per_question_records.append(
+                    {
+                        "dimension": str(dim),
+                        "type": type_key,
+                        "source_file": source_file,
+                        "question": question_text,
+                        "ground_truth_raw": str(true_raw),
+                        "ground_truth_normalized": true_label,
+                        "predicted_raw": predicted_raw,
+                        "predicted_normalized": predicted_normalized,
+                        "is_correct": "1" if is_correct else "0",
+                        "response": response,
+                    }
+                )
 
             # Collect per-type stats
             accuracy = correct / n if n > 0 else 0
@@ -412,6 +482,38 @@ def evaluate(
     # overall accuracy across types (including numeric)
     overall_accuracy = total_correct / total if total > 0 else 0
 
+    # Save per-question judgments for post-analysis.
+    per_question_path = os.path.join(output_dir, f"dim_{dim}_per_question.csv")
+    correct_path = os.path.join(output_dir, f"dim_{dim}_correct.csv")
+    incorrect_path = os.path.join(output_dir, f"dim_{dim}_incorrect.csv")
+    fieldnames = [
+        "dimension",
+        "type",
+        "source_file",
+        "question",
+        "ground_truth_raw",
+        "ground_truth_normalized",
+        "predicted_raw",
+        "predicted_normalized",
+        "is_correct",
+        "response",
+    ]
+
+    with open(per_question_path, "w", encoding="utf-8", newline="") as pf:
+        writer = csv.DictWriter(pf, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(per_question_records)
+
+    with open(correct_path, "w", encoding="utf-8", newline="") as cf:
+        writer = csv.DictWriter(cf, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows([r for r in per_question_records if r["is_correct"] == "1"])
+
+    with open(incorrect_path, "w", encoding="utf-8", newline="") as inf:
+        writer = csv.DictWriter(inf, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows([r for r in per_question_records if r["is_correct"] == "0"])
+
     # Pretty-print results for this dimension into results.text
     with open(result_path, "a", encoding="utf-8") as result_file:
         result_file.write("\n")
@@ -438,12 +540,29 @@ if __name__ == "__main__":
     parser.add_argument("--models", type=str, help="Comma-separated model names to evaluate (default: built-in list)")
     parser.add_argument("--dims", type=str, default="2", help="Comma-separated dimensions to evaluate (default: 2)")
     parser.add_argument("--batch-size", type=int, default=8, help="Batch size for local generation")
-    parser.add_argument("--max-new-tokens", type=int, default=1024, help="Max new tokens to generate per prompt")
+    parser.add_argument("--max-new-tokens", type=int, default=2048, help="Max new tokens to generate per prompt")
+    parser.add_argument("--greedy", action="store_true", help="Use greedy decoding (do_sample=False)")
+    parser.add_argument("--temperature", type=float, default=0.1, help="Sampling temperature")
+    parser.add_argument("--top-p", type=float, default=0.9, help="Top-p for sampling")
+    parser.add_argument("--top-k", type=int, default=0, help="Top-k for sampling (0 means disabled)")
+    parser.add_argument("--repetition-penalty", type=float, default=1.1, help="Repetition penalty")
     parser.add_argument("--dtype", type=str, default="float16", help="Preferred dtype for vLLM local models: float16|bfloat16|float32")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.7, help="GPU memory utilization fraction for vLLM")
     parser.add_argument("--no-reasoning", action="store_true", help="Disable chain-of-thought reasoning prompts")
     parser.add_argument("--results-root", type=str, default=RESULTS_ROOT, help="Base directory to write results into")
     parser.add_argument("--timestamp", type=str, default=None, help="Timestamp string to use for this run (default: now)")
+    parser.add_argument(
+        "--questions-csv",
+        type=str,
+        default="data/questions_augmented.csv",
+        help="Path to multiple-choice questions CSV",
+    )
+    parser.add_argument(
+        "--numeric-csv",
+        type=str,
+        default="data/numeric_augmented.csv",
+        help="Path to numeric questions CSV",
+    )
     args = parser.parse_args()
 
     # default model list (kept for backwards compatibility)
@@ -522,7 +641,14 @@ if __name__ == "__main__":
                 tokenizer=None,
                 batch_size=args.batch_size,
                 max_new_tokens=args.max_new_tokens,
+                do_sample=not args.greedy,
+                top_k=args.top_k,
+                top_p=args.top_p,
+                temperature=args.temperature,
+                repetition_penalty=args.repetition_penalty,
                 reasoning=reasoning,
+                questions_csv_path=args.questions_csv,
+                numeric_csv_path=args.numeric_csv,
             )
 
             # free GPU/CPU resources

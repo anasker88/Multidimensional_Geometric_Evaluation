@@ -94,6 +94,49 @@ python scripts/augment_questions.py
 
 This generates `data/questions_augmented.csv` with augmented variants.
 
+### Generating New Questions with GPT-5
+
+`master/make_problems.py` can generate new 2D/3D/4D aligned triplet questions from the built-in prompt and save them as CSV.
+
+```bash
+# Set Azure OpenAI credentials
+export AZURE_OPENAI_API_KEY="<your_api_key>"
+export AZURE_OPENAI_ENDPOINT="<your_endpoint>"
+export AZURE_OPENAI_API_VERSION="<your_api_version>"
+
+# Generate 60 rows (called in 20-row batches with different seeds)
+python master/make_problems.py --model gpt-5 --rows 60 --batch-rows 20 --seed 42 --output master/data/questions_generated.csv
+```
+
+Useful options:
+- `--rows`: total rows to generate (default: `20`)
+- `--batch-rows`: rows per API call (default: `20`)
+- `--type-mix`: balance instruction for types 1/2/3 (default: `roughly_even`)
+- `--shapes-mix`: shape diversity instruction (default: `rectangle,triangle,circle`)
+- `--seed`: base seed; each batch increments it (`seed`, `seed+1`, ...) (default: `42`)
+- `--allow-missing`: allow `-` in 2D/3D/4D columns
+- `--max-retries`: retries when invalid CSV is returned (default: `3`)
+- `--allow-duplicate-triplets`: allow duplicate `(2D,3D,4D)` rows (off by default)
+- `--tail-retry-margin`: when remaining rows are <= one batch, request extra rows (`batch_rows + margin`) and discard overflow (default: `20`)
+- `--max-duplicate-rows`: maximum allowed duplicated triplet rows (default: `0`)
+- `--min-count-per-type`: minimum count required for each type 1/2/3 (default: `1`)
+- `--strict-validation`: fail the run when validation does not pass
+
+The script automatically prints a validation summary after generation, including:
+- type distribution (`type1`, `type2`, `type3` counts)
+- duplicated triplet row count
+- pass/fail status against thresholds
+
+By default, duplicate triplets are filtered out during generation and additional seeded calls are made until the target row count is reached (or a safety call limit is hit).
+
+To reduce duplicates earlier (before post-filtering), each batch prompt now includes:
+- hard uniqueness constraints within the batch
+- a recent list of previously accepted triplets that must not be regenerated
+
+To improve late-stage efficiency, the generator now over-requests rows near completion and trims extras so it needs fewer retries when unique rows become sparse.
+
+This prompt-level negative list significantly reduces repeated templates such as repeated rectangle edge-pair questions.
+
 ---
 
 ## Validating SAE Activations
@@ -117,8 +160,16 @@ Key options:
 - `--prompt-type`: Select prompt style if multiple activation files exist (`with_reasoning`, `without_reasoning`, or `auto`).
 - `--results-dir`: Where to save plots and visualization outputs (default: `output/validate`).
 - `--visualize-topk-sentences`: Number of top prompts per dimension to visualize.
+- `--filter-correct-dir`: Use only evaluate-correct questions from `evaluate.py` outputs (expects `dim_{d}_correct.csv` or `dim_{d}_per_question.csv` in the given directory).
 - `--no-visualize`: Disable visualization output.
 - `--probe-random-samples`: Number of random feature sets for a single aggregated random baseline probe.
+
+When running `master/run_validation.sh`, validation outputs are saved to a unique run directory by default:
+`output/validate/{timestamp}_{model_name}_dim{d1vsd2}`.
+
+Each run stores execution conditions in:
+- `run_conditions_shell.json` (wrapper script parameters)
+- `run_conditions_validate.json` (actual `validate.py` arguments and resolved runtime context)
 
 Probe behavior:
 - Feature-based probes are reported per method (`diff`, `reason`).

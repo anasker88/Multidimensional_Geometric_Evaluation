@@ -66,6 +66,15 @@ def filter_tokens_scores_to_question_answer(
 	return filtered_tokens_all, filtered_scores_all
 
 
+def extract_question_answer_segments(prompts: List[str]) -> List[str]:
+	segments: List[str] = []
+	for prompt in prompts:
+		start, end = _question_answer_span(prompt)
+		segment = prompt[start:end]
+		segments.append(segment if segment else prompt)
+	return segments
+
+
 def build_prompt_list(metadata: Dict, dim: int, prompt_type: str) -> List[str]:
 	items = metadata.get("items") or []
 	prompts: List[str] = []
@@ -96,6 +105,25 @@ def collect_topk_prompt_data(
 	acts = activations[:, feature_index]
 	k = min(k, acts.numel())
 	vals, inds = torch.topk(acts, k=k)
+	data: List[Dict[str, float | str]] = []
+	for idx, val in zip(inds.tolist(), vals.tolist()):
+		data.append({"prompt": prompts[idx], "score": float(val)})
+	return data
+
+
+def collect_topk_prompt_data_from_scores(
+	prompts: List[str],
+	scores: List[float],
+	k: int,
+) -> List[Dict[str, float | str]]:
+	if len(prompts) != len(scores):
+		raise ValueError("Prompt count does not match score count.")
+	if not prompts:
+		return []
+
+	score_tensor = torch.tensor(scores, dtype=torch.float32)
+	k = min(k, score_tensor.numel())
+	vals, inds = torch.topk(score_tensor, k=k)
 	data: List[Dict[str, float | str]] = []
 	for idx, val in zip(inds.tolist(), vals.tolist()):
 		data.append({"prompt": prompts[idx], "score": float(val)})
@@ -281,6 +309,36 @@ class TokenActivationVisualizer:
 			for row in selected:
 				results.append(row.tolist())
 			del cache, acts
+			if torch.cuda.is_available():
+				torch.cuda.empty_cache()
+		return results
+
+	@torch.no_grad()
+	def pooled_feature_activations(
+		self,
+		prompts: List[str],
+		feature_index: int,
+		batch_size: int = 4,
+		pooling: str = "max",
+	) -> List[float]:
+		results: List[float] = []
+		for i in range(0, len(prompts), batch_size):
+			batch = prompts[i : i + batch_size]
+			kwargs = {"names_filter": [self.hook_point]}
+			if self.stop_at_layer is not None:
+				kwargs["stop_at_layer"] = self.stop_at_layer
+			_, cache = self.model.run_with_cache_with_saes(batch, saes=[self.sae], **kwargs)
+			acts = cache[self.hook_point][:, :, feature_index].to(torch.float32)
+			if pooling == "max":
+				pooled = acts.max(dim=1).values
+			elif pooling == "mean":
+				pooled = acts.mean(dim=1)
+			elif pooling == "last":
+				pooled = acts[:, -1]
+			else:
+				raise ValueError(f"Unknown pooling mode: {pooling}")
+			results.extend(pooled.cpu().tolist())
+			del cache, acts, pooled
 			if torch.cuda.is_available():
 				torch.cuda.empty_cache()
 		return results

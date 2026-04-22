@@ -135,7 +135,7 @@ def run_probe_and_report(
 	feature_indices: List[int],
 	label: str,
 	args,
-) -> None:
+) -> Dict[str, float | int | str | None]:
 	try:
 		x, y, n1, n2 = _build_probe_dataset(activations, dim1, dim2, feature_indices)
 		accs = run_linear_probe(
@@ -155,8 +155,23 @@ def run_probe_and_report(
 			f"Probe accuracy ({label}): "
 			f"mean={mean_acc:.4f}, std={std_acc:.4f}, folds={len(accs)}"
 		)
+		return {
+			"label": label,
+			"status": "ok",
+			"mean": mean_acc,
+			"std": std_acc,
+			"folds": len(accs),
+		}
 	except ValueError as e:
 		print(f"Probe skipped ({label}): {e}")
+		return {
+			"label": label,
+			"status": "skipped",
+			"reason": str(e),
+			"mean": None,
+			"std": None,
+			"folds": 0,
+		}
 
 
 def run_random_probe_baseline_and_report(
@@ -167,7 +182,7 @@ def run_random_probe_baseline_and_report(
 	args,
 	n_samples: int,
 	seed_offset: int = 1000,
-) -> None:
+) -> Dict[str, float | int | str | None]:
 	if n_samples < 1:
 		raise ValueError("n_samples must be >= 1 for random baseline probing.")
 
@@ -208,3 +223,13 @@ def run_random_probe_baseline_and_report(
 		f"samples={n_samples}, features={k}, avg_fold_std={avg_fold_std:.4f}, "
 		f"folds_per_sample={min(fold_counts) if fold_counts else 0}"
 	)
+	return {
+		"label": "random-baseline",
+		"status": "ok",
+		"mean": mean_of_means,
+		"std": std_of_means,
+		"samples": n_samples,
+		"features": k,
+		"avg_fold_std": avg_fold_std,
+		"folds_per_sample": min(fold_counts) if fold_counts else 0,
+	}
