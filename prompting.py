@@ -8,17 +8,17 @@ prelude_explanations = {
 You are evaluating a multiple-choice geometry question.
 You may think step-by-step and output your full reasoning.
 After your reasoning, you MUST output the final answer in the format:
-<final_answer>A</final_answer>
+<answer>A</answer>
 where A is one of {choices}.
-Nothing else should appear inside <final_answer> tags.
+Nothing else should appear inside <answer> tags.
 Question:
 """,
     "without_reasoning": """
 You are evaluating a multiple-choice geometry question.
 You MUST output the final answer in the format:
-<final_answer>A</final_answer>
+<answer>A</answer>
 where A is one of {choices}.
-Nothing else should appear inside <final_answer> tags.
+Nothing else should appear inside <answer> tags.
 Question:
 """,
 }
@@ -43,7 +43,7 @@ numeric_preludes = {
 You are evaluating a numeric geometry question.
 You may think step-by-step and output your full reasoning.
 After your reasoning, you MUST output the final answer in the format:
-<final_answer>...</final_answer>
+<answer>...</answer>
 where ... is the numeric answer.
 If the answer is a multiple of π or π^2, output the numeric multiplier (e.g. 12 for 12π).
 Do not include units or explanatory text inside the tags.
@@ -52,7 +52,7 @@ Question:
     "without_reasoning": """
 You are evaluating a numeric geometry question.
 You MUST output the final answer in the format:
-<final_answer>...</final_answer>
+<answer>...</answer>
 where ... is the numeric answer.
 If the answer is a multiple of π or π^2, output the numeric multiplier (e.g. 12 for 12π).
 Do not include units or explanatory text inside the tags.

@@ -252,10 +252,17 @@ class TokenActivationVisualizer:
 	stop_at_layer: int | None
 
 	@classmethod
-	def from_metadata(cls, metadata: Dict, device: str = "auto") -> "TokenActivationVisualizer":
-		model_name = metadata.get("model_name")
-		sae_release = metadata.get("sae_release")
-		sae_id = metadata.get("sae_id")
+	def from_metadata(
+		cls,
+		metadata: Dict,
+		device: str = "auto",
+		sae_release: str | None = None,
+		sae_id: str | None = None,
+		model_name: str | None = None,
+	) -> "TokenActivationVisualizer":
+		model_name = model_name or metadata.get("model_name")
+		sae_release = sae_release or metadata.get("sae_release")
+		sae_id = sae_id or metadata.get("sae_id")
 		if not model_name or not sae_release or not sae_id:
 			raise ValueError("metadata must include model_name, sae_release, and sae_id")
 		if device == "auto":

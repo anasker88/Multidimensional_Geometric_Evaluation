@@ -7,7 +7,10 @@ Evaluate LLM performance on geometry questions across 2D, 3D, and 4D geometric s
 ### Git-Tracked Files
 
 #### Root Level
-- **`evaluate.py`** — Main evaluation script. Runs multiple-choice and numeric geometry questions against LLMs, computes accuracy per question type, generates confusion matrices, and logs results.
+- **`cli/`** — Entry-point scripts (`evaluate.py`, `validate.py`, `make_problems.py`).
+- **`evaluate.py`** — Compatibility wrapper (for existing commands).
+- **`validate.py`** — Compatibility wrapper (for existing commands).
+- **`make_problems.py`** — Compatibility wrapper (for existing commands).
 
 
 #### Data Directory (`data/`)
@@ -51,16 +54,16 @@ export AZURE_OPENAI_ENDPOINT="<your_endpoint>"
 export AZURE_OPENAI_API_VERSION="<your_api_version>"
 
 # Run with defaults (built-in model list, 2D):
-python master/evaluate.py
+python master/cli/evaluate.py
 
 # Evaluate a single local vLLM model for 2D and 3D:
-python master/evaluate.py --models Qwen/Qwen2.5-7B-Instruct --dims 2,3
+python master/cli/evaluate.py --models Qwen/Qwen2.5-7B-Instruct --dims 2,3
 
 # Multiple models, custom batch size and token limit:
-python master/evaluate.py --models Qwen/Qwen2.5-7B-Instruct,gpt-4o --dims 2 --batch-size 4 --max-new-tokens 512
+python master/cli/evaluate.py --models Qwen/Qwen2.5-7B-Instruct,gpt-4o --dims 2 --batch-size 4 --max-new-tokens 512
 
 # Save results under a custom root and explicit timestamp:
-python master/evaluate.py --results-root my_results --timestamp 20251225_120000
+python master/cli/evaluate.py --results-root my_results --timestamp 20251225_120000
 ```
 
 Notes:
@@ -96,7 +99,7 @@ This generates `data/questions_augmented.csv` with augmented variants.
 
 ### Generating New Questions with GPT-5
 
-`master/make_problems.py` can generate new 2D/3D/4D aligned triplet questions from the built-in prompt and save them as CSV.
+`master/cli/make_problems.py` can generate new 2D/3D/4D aligned triplet questions from the built-in prompt and save them as CSV.
 
 ```bash
 # Set Azure OpenAI credentials
@@ -105,7 +108,7 @@ export AZURE_OPENAI_ENDPOINT="<your_endpoint>"
 export AZURE_OPENAI_API_VERSION="<your_api_version>"
 
 # Generate 60 rows (called in 20-row batches with different seeds)
-python master/make_problems.py --model gpt-5 --rows 60 --batch-rows 20 --seed 42 --output master/data/questions_generated.csv
+python master/cli/make_problems.py --model gpt-5 --rows 60 --batch-rows 20 --seed 42 --output master/data/questions_generated.csv
 ```
 
 Useful options:
@@ -141,16 +144,17 @@ This prompt-level negative list significantly reduces repeated templates such as
 
 ## Validating SAE Activations
 
-The validation script loads feature activation tensors produced by `save_activation.py`,
-computes singular features between two dimensions, optionally probes them, and saves
-visualizations of the most active prompts.
+The validation script loads feature activation tensors if they already exist, or
+generates them on demand and caches them under `sae_activations/`.
 
 ```bash
 # Example: compare dim4 vs dim3 and visualize top-10 features (diff + ReasonScore)
-python master/validate.py \
+python master/cli/validate.py \
   --output-dir sae_activations \
   --model-name google/gemma-2-9b \
   --layer layer_20 \
+  --sae-release gemma-scope-9b-pt-mlp-canonical \
+  --sae-id layer_20/width_16k/canonical \
   --singular-dims 4,3 \
   --singular-method both \
   --topk 10
@@ -163,6 +167,14 @@ Key options:
 - `--filter-correct-dir`: Use only evaluate-correct questions from `evaluate.py` outputs (expects `dim_{d}_correct.csv` or `dim_{d}_per_question.csv` in the given directory).
 - `--no-visualize`: Disable visualization output.
 - `--probe-random-samples`: Number of random feature sets for a single aggregated random baseline probe.
+- `--sae-release`, `--sae-id`: Override SAE source used for visualization/ablation and activation generation.
+
+Activation generation options (used only when cached activations are missing):
+- `--activation-questions-csv`, `--activation-numeric-csv`
+- `--activation-pooling` (`max`, `mean`, `last`)
+- `--activation-reasoning` (`with`, `without`, `both`)
+- `--activation-batch-size`
+- `--activation-device`, `--activation-fallback-cpu`
 
 When running `master/run_validation.sh`, validation outputs are saved to a unique run directory by default:
 `output/validate/{timestamp}_{model_name}_dim{d1vsd2}`.
