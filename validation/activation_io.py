@@ -9,7 +9,12 @@ import torch
 from sae_lens import SAE, HookedSAETransformer
 from transformers import AutoModelForCausalLM
 
-from prompting import make_prompt_mc, make_prompt_numeric
+from prompting import (
+	make_prompt_mc,
+	make_prompt_mc_variants,
+	make_prompt_numeric,
+	resolve_prompt_key,
+)
 
 
 @dataclass(frozen=True)
@@ -106,8 +111,9 @@ def _resolve_out_dir(output_dir: str, model_name: str | None, layer: str | None)
 	return primary
 
 
-def _read_questions_augmented(csv_path: str, reasoning: bool) -> List[PromptItem]:
+def _read_questions_augmented(csv_path: str, reasoning: bool | str) -> List[PromptItem]:
 	items: List[PromptItem] = []
+	mode_key = resolve_prompt_key(reasoning)
 	with open(csv_path, "r", encoding="utf-8", newline="") as f:
 		reader = csv.DictReader(f)
 		for i, row in enumerate(reader):
@@ -117,22 +123,26 @@ def _read_questions_augmented(csv_path: str, reasoning: bool) -> List[PromptItem
 				if not q or q == "-":
 					continue
 				uid = f"questions_augmented:{i}:{dim_col}"
-				prompt = make_prompt_mc(q, qtype or "1", reasoning=reasoning)
-				items.append(
-					PromptItem(
-						uid=uid,
-						source="questions_augmented",
-						dimension=dim,
-						qtype=qtype,
-						question=prompt,
-						prompt_type="with_reasoning" if reasoning else "without_reasoning",
+				variants = make_prompt_mc_variants(q, qtype or "1", reasoning=mode_key)
+				for variant in variants:
+					rotation = int(variant["rotation"])
+					prompt = str(variant["prompt"])
+					items.append(
+						PromptItem(
+							uid=f"{uid}:rot{rotation}",
+							source="questions_augmented",
+							dimension=dim,
+							qtype=qtype,
+							question=prompt,
+							prompt_type=mode_key,
+						)
 					)
-				)
 	return items
 
 
-def _read_numeric_augmented(csv_path: str, reasoning: bool) -> List[PromptItem]:
+def _read_numeric_augmented(csv_path: str, reasoning: bool | str) -> List[PromptItem]:
 	items: List[PromptItem] = []
+	mode_key = resolve_prompt_key(reasoning)
 	with open(csv_path, "r", encoding="utf-8", newline="") as f:
 		reader = csv.DictReader(f)
 		for i, row in enumerate(reader):
@@ -145,7 +155,7 @@ def _read_numeric_augmented(csv_path: str, reasoning: bool) -> List[PromptItem]:
 			except Exception:
 				dim = None
 			uid = f"numeric_augmented:{i}"
-			prompt = make_prompt_numeric(q, reasoning=reasoning)
+			prompt = make_prompt_numeric(q, reasoning=mode_key)
 			items.append(
 				PromptItem(
 					uid=uid,
@@ -153,7 +163,7 @@ def _read_numeric_augmented(csv_path: str, reasoning: bool) -> List[PromptItem]:
 					dimension=dim,
 					qtype="numeric",
 					question=prompt,
-					prompt_type="with_reasoning" if reasoning else "without_reasoning",
+					prompt_type=mode_key,
 				)
 			)
 	return items
@@ -331,6 +341,8 @@ def _select_prompt_types(
 		return {dim: "with_reasoning" for dim in files_by_dim.keys()}
 	if all("without_reasoning" in types for types in all_types_by_dim.values()):
 		return {dim: "without_reasoning" for dim in files_by_dim.keys()}
+	if all("simple_prompt" in types for types in all_types_by_dim.values()):
+		return {dim: "simple_prompt" for dim in files_by_dim.keys()}
 
 	selected: Dict[int, str] = {}
 	for dim, types in all_types_by_dim.items():
@@ -479,22 +491,23 @@ def ensure_feature_activations(
 		out_dir = os.path.join(output_dir, model_dir, layer or layer_label)
 	os.makedirs(out_dir, exist_ok=True)
 
-	reasoning_modes: List[bool] = []
+	reasoning_modes: List[str] = []
 	if reasoning in ("with", "both"):
-		reasoning_modes.append(True)
+		reasoning_modes.append("with_reasoning")
 	if reasoning in ("without", "both"):
-		reasoning_modes.append(False)
+		reasoning_modes.append("without_reasoning")
+	if reasoning == "simple":
+		reasoning_modes.append("simple_prompt")
 	if not reasoning_modes:
-		reasoning_modes = [False]
+		reasoning_modes = ["without_reasoning"]
 
 	results: Dict[str, Dict[str, List[Dict[str, float]]]] = {}
 	all_items: List[PromptItem] = []
 	saved_activation_files: List[str] = []
 
-	for reasoning_flag in reasoning_modes:
-		mode_key = "with_reasoning" if reasoning_flag else "without_reasoning"
-		items = _read_questions_augmented(questions_csv, reasoning=reasoning_flag)
-		items.extend(_read_numeric_augmented(numeric_csv, reasoning=reasoning_flag))
+	for mode_key in reasoning_modes:
+		items = _read_questions_augmented(questions_csv, reasoning=mode_key)
+		items.extend(_read_numeric_augmented(numeric_csv, reasoning=mode_key))
 		all_items.extend(items)
 
 		by_dim: Dict[int, List[PromptItem]] = {}

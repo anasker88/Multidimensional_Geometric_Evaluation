@@ -15,7 +15,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from prompting import make_prompt_mc, make_prompt_numeric
+from prompting import (
+    apply_chat_template as _apply_chat_template,
+    make_prompt_mc,
+    make_prompt_mc_variants,
+    make_prompt_numeric,
+    needs_chat_template as _needs_chat_template,
+    remap_answer_for_rotation,
+)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 
@@ -32,7 +39,7 @@ def _resolve_data_path(path: str) -> str:
 def _build_azure_client() -> AzureOpenAI:
     api_key = os.getenv("AZURE_OPENAI_API_KEY", "")
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-    api_version = os.getenv("AZURE_OPENAI_API_VERSION","")
+    api_version = os.getenv("AZURE_OPENAI_API_VERSION", "")
     return AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
 
 
@@ -52,6 +59,11 @@ def chat(
 ) -> List[str]:
     responses: List[str] = []
 
+    def _strip_prompt_echo(prompt: str, text: str) -> str:
+        if prompt and text.startswith(prompt):
+            text = text[len(prompt):]
+        return text.strip()
+
     if model is None:
         client = _build_azure_client()
         for prompt in prompts:
@@ -62,20 +74,13 @@ def chat(
                     {"role": "user", "content": prompt},
                 ],
             )
-            # AzureOpenAI client may return different shapes depending on SDK/version:
-            # - an object with .choices[0].message.content
-            # - a dict-like with ['choices'][0]['message']['content']
-            # - sometimes a plain string
             content = None
             try:
-                # Try attribute-style access first
                 content = response.choices[0].message.content.strip()
             except Exception:
                 try:
-                    # Try dict-like access
                     content = response["choices"][0]["message"]["content"].strip()
                 except Exception:
-                    # Fallback to str() of response
                     try:
                         content = str(response).strip()
                     except Exception:
@@ -83,33 +88,43 @@ def chat(
             responses.append(content)
         return responses
 
-    # Local model path: run in batches to avoid huge memory usage
     if len(prompts) == 0:
         return responses
 
-    # determine device for inputs; handle sharded/multi-device models safely
+    # Determine device for HF models; vLLM handles its own device management.
     try:
         first_param = next(model.parameters())
         device = first_param.device
     except Exception:
         device = getattr(model, "device", torch.device("cpu"))
 
+    # vLLM: top_k=0 means "sample from 0 tokens" and causes empty output.
+    # Use -1 to disable top-k filtering instead.
+    vllm_top_k = top_k if top_k > 0 else -1
+
     batch_num = (len(prompts) + batch_size - 1) // batch_size
 
     for i in range(batch_num):
-        batch_prompts = prompts[i * batch_size : (i + 1) * batch_size]
-        # Handle vllm LLM instances separately (they expect raw prompts)
+        batch_prompts = prompts[i * batch_size: (i + 1) * batch_size]
+
         if isinstance(model, LLM):
+            # Apply the model's chat template to every prompt so that
+            # instruction-tuned models (e.g. Gemma-2-it) receive properly
+            # formatted input and do not produce empty outputs.
+            templated_prompts = [
+                _apply_chat_template(p, model_name or "") for p in batch_prompts
+            ]
+
             try:
                 sampling_params = SamplingParams(
                     temperature=temperature,
                     top_p=top_p,
-                    top_k=top_k,
+                    top_k=vllm_top_k,
                     repetition_penalty=repetition_penalty,
                     max_tokens=max_new_tokens,
+                    min_tokens=1,
                 )
-                # vLLM accepts a sequence of prompt strings and returns a list of RequestOutput
-                outputs = model.generate(batch_prompts, sampling_params=sampling_params, use_tqdm=False)
+                outputs = model.generate(templated_prompts, sampling_params=sampling_params, use_tqdm=False)
             except RuntimeError as e:
                 err = str(e).lower()
                 if "out of memory" in err or "cuda out of memory" in err:
@@ -121,11 +136,12 @@ def chat(
                         sampling_params = SamplingParams(
                             temperature=temperature,
                             top_p=top_p,
-                            top_k=top_k,
+                            top_k=vllm_top_k,
                             repetition_penalty=repetition_penalty,
                             max_tokens=max(32, max_new_tokens // 4),
+                            min_tokens=1,  # Fix: was missing in OOM fallback
                         )
-                        outputs = model.generate(batch_prompts, sampling_params=sampling_params, use_tqdm=False)
+                        outputs = model.generate(templated_prompts, sampling_params=sampling_params, use_tqdm=False)
                     except Exception:
                         outputs = None
                 else:
@@ -133,19 +149,18 @@ def chat(
 
             if outputs is None:
                 batch_responses = ["" for _ in batch_prompts]
+                allow_retry = False
             else:
                 batch_responses = []
-                for prompt, req_out in zip(batch_prompts, outputs):
-                    # concatenate all completion outputs for this request
+                for req_out in outputs:
                     try:
                         text = "".join([c.text for c in req_out.outputs])
                     except Exception:
-                        # best-effort fallback
                         text = getattr(req_out, "prompt", "") or ""
-                    # strip prompt prefix if echoed
-                    if prompt and text.startswith(prompt):
-                        text = text[len(prompt) :].strip()
+                    # vLLM returns only the generated text (not the prompt),
+                    # so _strip_prompt_echo is not needed here.
                     batch_responses.append(text.strip())
+                allow_retry = True
         else:
             inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True)
             inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -153,6 +168,7 @@ def chat(
                 outputs = model.generate(
                     **inputs,
                     max_new_tokens=max_new_tokens,
+                    min_new_tokens=1,
                     do_sample=do_sample,
                     top_k=top_k if top_k > 0 else None,
                     top_p=top_p,
@@ -183,13 +199,66 @@ def chat(
                     raise
             if outputs is None:
                 batch_responses = ["" for _ in batch_prompts]
+                allow_retry = False
             else:
                 batch_responses = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-                # remove the input part from the response (best-effort)
                 batch_responses = [
-                    resp[len(prompt) :].strip() if resp.startswith(prompt) else resp.strip()
+                    _strip_prompt_echo(prompt, resp)
                     for resp, prompt in zip(batch_responses, batch_prompts)
                 ]
+                allow_retry = True
+
+        if allow_retry:
+            empty_idxs = [idx for idx, text in enumerate(batch_responses) if not text.strip()]
+            if empty_idxs:
+                retry_prompts_raw = [batch_prompts[idx] for idx in empty_idxs]
+                if isinstance(model, LLM):
+                    retry_prompts = [
+                        _apply_chat_template(p, model_name or "") for p in retry_prompts_raw
+                    ]
+                    retry_params = SamplingParams(
+                        temperature=0.0,
+                        top_p=1.0,
+                        top_k=-1,  # Fix: use -1 (disabled) instead of 0
+                        repetition_penalty=repetition_penalty,
+                        max_tokens=max(8, min(64, max_new_tokens)),
+                        min_tokens=1,
+                    )
+                    try:
+                        retry_outputs = model.generate(retry_prompts, sampling_params=retry_params, use_tqdm=False)
+                    except Exception:
+                        retry_outputs = None
+                    if retry_outputs is not None:
+                        for rel_idx, req_out in enumerate(retry_outputs):
+                            try:
+                                text = "".join([c.text for c in req_out.outputs])
+                            except Exception:
+                                text = getattr(req_out, "prompt", "") or ""
+                            cleaned = text.strip()
+                            if cleaned:
+                                batch_responses[empty_idxs[rel_idx]] = cleaned
+                else:
+                    retry_inputs = tokenizer(retry_prompts_raw, return_tensors="pt", padding=True, truncation=True)
+                    retry_inputs = {k: v.to(device) for k, v in retry_inputs.items()}
+                    try:
+                        retry_outputs = model.generate(
+                            **retry_inputs,
+                            max_new_tokens=max(8, min(64, max_new_tokens)),
+                            min_new_tokens=1,
+                            do_sample=False,
+                            top_k=None,
+                            top_p=1.0,
+                            temperature=0.0,
+                            repetition_penalty=repetition_penalty,
+                        )
+                    except Exception:
+                        retry_outputs = None
+                    if retry_outputs is not None:
+                        retry_texts = tokenizer.batch_decode(retry_outputs, skip_special_tokens=True)
+                        for rel_idx, (prompt, text) in enumerate(zip(retry_prompts_raw, retry_texts)):
+                            cleaned = _strip_prompt_echo(prompt, text)
+                            if cleaned:
+                                batch_responses[empty_idxs[rel_idx]] = cleaned
         responses.extend(batch_responses)
     return responses
 
@@ -200,7 +269,7 @@ def chat(
 def extract_answer(response: str) -> Optional[str]:
     """Extract the model's answer letter (A-E) from the response, preferring the last match.
     Prioritizes the last `<answer>...</answer>`; if none,
-    falls back to the last `\boxed{...}` match. Returns the uppercase letter A-E or None.
+    falls back to the last `\\boxed{...}` match. Returns the uppercase letter A-E or None.
     """
     if not response:
         return None
@@ -212,7 +281,6 @@ def extract_answer(response: str) -> Optional[str]:
         if m:
             return m.group(1).upper()
 
-    # Fallback: last \boxed{...}
     last_box = None
     for m in re.finditer(r"\\boxed\{([^}]*)\}", response, re.IGNORECASE):
         last_box = m.group(1)
@@ -223,6 +291,26 @@ def extract_answer(response: str) -> Optional[str]:
         m3 = re.search(r"[A-Za-z]", last_box)
         if m3:
             return m3.group(0).upper()
+
+    simple_match = re.search(r"Assistant:\s*The answer is\s*([A-E])\b", response, re.IGNORECASE)
+    if simple_match:
+        return simple_match.group(1).upper()
+
+    answer_is_match = re.search(r"answer\s+is\s*\*{0,2}\s*\(?([A-E])\)?", response, re.IGNORECASE)
+    if answer_is_match:
+        return answer_is_match.group(1).upper()
+
+    choice_match = re.search(r"\b([A-E])\.\s", response)
+    if choice_match:
+        return choice_match.group(1).upper()
+
+    md_choice_match = re.search(r"\*{1,2}\s*\(?([A-E])\)?", response, re.IGNORECASE)
+    if md_choice_match:
+        return md_choice_match.group(1).upper()
+
+    simple_token = re.match(r"^\s*([A-E])\s*$", response, re.IGNORECASE | re.MULTILINE)
+    if simple_token:
+        return simple_token.group(1).upper()
     return None
 
 
@@ -230,7 +318,7 @@ def extract_numeric(response: str) -> Optional[str]:
     """Extract a numeric answer from response.
     Priority:
     1. Last <answer>...<answer> content: return first integer found.
-    2. Last \boxed{...} content: return first integer found.
+    2. Last \\boxed{...} content: return first integer found.
     3. Last non-empty line: extract first integer token.
     Returns the integer as a string, or None if not found.
     """
@@ -251,6 +339,18 @@ def extract_numeric(response: str) -> Optional[str]:
         m = re.search(r"(-?\d+)", last_box)
         if m:
             return m.group(1)
+
+    simple_match = re.search(r"Assistant:\s*The answer is\s*(-?\d+)\b", response, re.IGNORECASE)
+    if simple_match:
+        return simple_match.group(1)
+
+    number_match = re.search(r"\b(-?\d+)\b", response)
+    if number_match:
+        return number_match.group(1)
+
+    simple_token = re.match(r"^\s*(-?\d+)\s*$", response, re.MULTILINE)
+    if simple_token:
+        return simple_token.group(1)
 
     for line in reversed([ln.strip() for ln in response.splitlines() if ln.strip()]):
         m = re.search(r"(-?\d+)", line)
@@ -292,6 +392,7 @@ def evaluate(
     temperature: float = 0.1,
     repetition_penalty: float = 1.1,
     reasoning: bool = True,
+    prompt_type: Optional[str] = None,
     questions_csv_path: str = "data/questions_augmented.csv",
     numeric_csv_path: str = "data/numeric_augmented.csv",
 ):
@@ -299,8 +400,8 @@ def evaluate(
     Returns the overall accuracy across all types (including numeric).
     """
     output_dir, result_path = _ensure_dirs(model_name or "model")
+    prompt_key = prompt_type or ("with_reasoning" if reasoning else "without_reasoning")
     csv_path = _resolve_data_path(questions_csv_path)
-    # csv_path = "data/questions.csv"
     log_path = os.path.join(output_dir, f"dim_{dim}.log")
 
     # Build per-type dataset from questions.csv
@@ -317,13 +418,19 @@ def evaluate(
             raw_answer = (row.get("answer") or "").strip()
             type_key = (row.get("type") or "unknown").strip() or "unknown"
             per_type_data.setdefault(type_key, {"prompts": [], "answers": [], "rows": []})
-            per_type_data[type_key]["prompts"].append(make_prompt_mc(question, type_key, reasoning=reasoning))
-            per_type_data[type_key]["answers"].append(raw_answer)
-            per_type_data[type_key]["rows"].append(row)
+            variants = make_prompt_mc_variants(question, type_key, reasoning=prompt_key)
+            for variant in variants:
+                remapped = remap_answer_for_rotation(
+                    raw_answer,
+                    int(variant["rotation"]),
+                    int(variant["num_choices"]),
+                )
+                per_type_data[type_key]["prompts"].append(str(variant["prompt"]))
+                per_type_data[type_key]["answers"].append(remapped)
+                per_type_data[type_key]["rows"].append(row)
 
     # add numeric from data/numeric.csv as its own type: "numeric"
     numeric_path = _resolve_data_path(numeric_csv_path)
-    # numeric_path = "data/numeric.csv"
     if os.path.exists(numeric_path):
         with open(numeric_path, "r", encoding="utf-8") as nf:
             nreader = csv.DictReader(nf)
@@ -339,7 +446,7 @@ def evaluate(
                 if not q or not ans:
                     continue
                 per_type_data.setdefault("numeric", {"prompts": [], "answers": [], "rows": []})
-                per_type_data["numeric"]["prompts"].append(make_prompt_numeric(q, reasoning=reasoning))
+                per_type_data["numeric"]["prompts"].append(make_prompt_numeric(q, reasoning=prompt_key))
                 per_type_data["numeric"]["answers"].append(ans)
                 per_type_data["numeric"]["rows"].append(row)
 
@@ -349,7 +456,6 @@ def evaluate(
     per_question_records: List[Dict[str, str]] = []
 
     with open(log_path, "w", encoding="utf-8") as log_file:
-        # sort types, keeping "unknown" last
         for type_key in sorted(per_type_data.keys(), key=lambda x: (x == "unknown", x)):
             prompts = per_type_data[type_key]["prompts"]
             answers = per_type_data[type_key]["answers"]
@@ -357,7 +463,6 @@ def evaluate(
             if n == 0:
                 continue
 
-            # derive labels for MC confusion matrix
             labels: List[str] = []
             if type_key != "numeric":
                 seen = OrderedDict()
@@ -368,9 +473,8 @@ def evaluate(
                 labels = sorted(list(seen.keys())) or ["A", "B", "C"]
                 confusion_matrix = np.zeros((len(labels), len(labels) + 1), dtype=int)
             else:
-                confusion_matrix = None  # not used for numeric
+                confusion_matrix = None
 
-            # Query model for this type
             responses = chat(
                 prompts,
                 model_name=model_name,
@@ -419,7 +523,6 @@ def evaluate(
                     if predicted is not None:
                         pred_alpha = predicted.strip().upper()
                         if true_label.isdigit():
-                            # map A->1, B->2, ...
                             idx = ord(pred_alpha) - ord("A")
                             if 0 <= idx < 26:
                                 pred_label = str(idx + 1)
@@ -433,7 +536,6 @@ def evaluate(
                         correct += 1
                         is_correct = True
 
-                    # fill confusion matrix for MC types
                     if confusion_matrix is not None:
                         if true_label in labels:
                             t_idx = labels.index(true_label)
@@ -465,13 +567,11 @@ def evaluate(
                     }
                 )
 
-            # Collect per-type stats
             accuracy = correct / n if n > 0 else 0
             total += n
             total_correct += correct
             per_type_stats.append((type_key, correct, n, accuracy))
 
-            # Save per-type confusion matrix plot (MC only)
             if confusion_matrix is not None:
                 plt.figure(figsize=(8, 6))
                 row_sums = np.sum(confusion_matrix, axis=1, keepdims=True)
@@ -489,10 +589,8 @@ def evaluate(
                 plt.savefig(os.path.join(output_dir, f"confusion_matrix_{dim}d_type_{type_key}.png"))
                 plt.close()
 
-    # overall accuracy across types (including numeric)
     overall_accuracy = total_correct / total if total > 0 else 0
 
-    # Save per-question judgments for post-analysis.
     per_question_path = os.path.join(output_dir, f"dim_{dim}_per_question.csv")
     correct_path = os.path.join(output_dir, f"dim_{dim}_correct.csv")
     incorrect_path = os.path.join(output_dir, f"dim_{dim}_incorrect.csv")
@@ -524,7 +622,6 @@ def evaluate(
         writer.writeheader()
         writer.writerows([r for r in per_question_records if r["is_correct"] == "0"])
 
-    # Pretty-print results for this dimension into results.text
     with open(result_path, "a", encoding="utf-8") as result_file:
         result_file.write("\n")
         result_file.write("========================================\n")
@@ -541,7 +638,6 @@ def evaluate(
     return overall_accuracy
 
 
-
 # -------------------------------------------------------------
 # Entrypoint
 # -------------------------------------------------------------
@@ -556,9 +652,16 @@ if __name__ == "__main__":
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p for sampling")
     parser.add_argument("--top-k", type=int, default=0, help="Top-k for sampling (0 means disabled)")
     parser.add_argument("--repetition-penalty", type=float, default=1.1, help="Repetition penalty")
-    parser.add_argument("--dtype", type=str, default="float16", help="Preferred dtype for vLLM local models: float16|bfloat16|float32")
+    parser.add_argument("--dtype", type=str, default="bfloat16", help="Preferred dtype for vLLM local models: float16|bfloat16|float32")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.7, help="GPU memory utilization fraction for vLLM")
     parser.add_argument("--no-reasoning", action="store_true", help="Disable chain-of-thought reasoning prompts")
+    parser.add_argument(
+        "--prompt-type",
+        type=str,
+        default=None,
+        choices=["with_reasoning", "without_reasoning", "simple_prompt"],
+        help="Override prompt style (default: based on --no-reasoning)",
+    )
     parser.add_argument("--results-root", type=str, default=RESULTS_ROOT, help="Base directory to write results into")
     parser.add_argument("--timestamp", type=str, default=None, help="Timestamp string to use for this run (default: now)")
     parser.add_argument(
@@ -575,7 +678,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # default model list (kept for backwards compatibility)
     default_models = [
         "Qwen/Qwen2.5-7B-Instruct",
         "Qwen/Qwen2.5-Math-7B-Instruct",
@@ -586,10 +688,8 @@ if __name__ == "__main__":
         "o1",
     ]
 
-    # configure globals from args
     if args.timestamp:
         try:
-            # simple validation: must be digits and underscores
             _ = str(args.timestamp)
             globals()["_RUN_TIMESTAMP"] = args.timestamp
         except Exception:
@@ -603,23 +703,20 @@ if __name__ == "__main__":
 
     dims = [int(d.strip()) for d in args.dims.split(",") if d.strip()]
     reasoning = not args.no_reasoning
+    prompt_type = args.prompt_type
 
     for model_name in model_names:
         output_dir, result_path = _ensure_dirs(model_name)
-        # Truncate results file at the start of this model's run so re-runs overwrite previous results
         with open(result_path, "w", encoding="utf-8") as _rf:
             _rf.write("")
 
         for dim in dims:
             print(f"Evaluating {model_name} for {dim} dimensions...")
             model = None
-            # Use Azure for hosted models, otherwise try to load local vLLM
             if model_name not in ["gpt-4o", "gpt-4o-mini", "o1", "gpt-5"]:
-                preferred_dtype = getattr(args, "dtype", "float16")
+                preferred_dtype = getattr(args, "dtype", "bfloat16")
                 gpu_mem_util = getattr(args, "gpu_memory_utilization", 0.7)
-                # Build a list of dtype candidates to try; prefer user choice but
-                # fall back to bfloat16/float32 if the model complains about float16.
-                tried = []
+                # Prefer bfloat16 by default; Gemma-2 is numerically unstable with float16.
                 if preferred_dtype == "float16":
                     dtype_candidates = ["float16", "bfloat16", "float32"]
                 elif preferred_dtype == "bfloat16":
@@ -635,10 +732,8 @@ if __name__ == "__main__":
                     except Exception as e:
                         last_exc = e
                         msg = str(e).lower()
-                        # If the model specifically rejects float16, continue to next candidate
                         if "does not support float16" in msg or "does not support bfloat16" in msg or "numerical instability" in msg:
                             continue
-                        # otherwise, stop trying and surface the error
                         model = None
                         break
                 if model is None and last_exc is not None:
@@ -657,17 +752,16 @@ if __name__ == "__main__":
                 temperature=args.temperature,
                 repetition_penalty=args.repetition_penalty,
                 reasoning=reasoning,
+                prompt_type=prompt_type,
                 questions_csv_path=args.questions_csv,
                 numeric_csv_path=args.numeric_csv,
             )
 
-            # free GPU/CPU resources
             try:
                 del model
             except Exception:
                 pass
             import gc
-
             gc.collect()
             try:
                 torch.cuda.empty_cache()

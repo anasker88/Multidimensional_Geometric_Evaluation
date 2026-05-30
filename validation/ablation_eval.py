@@ -8,7 +8,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tqdm.auto import tqdm
 
-from prompting import make_prompt_mc, make_prompt_numeric
+from prompting import (
+    apply_chat_template,
+    make_prompt_mc,
+    make_prompt_mc_variants,
+    make_prompt_numeric,
+    remap_answer_for_rotation,
+)
 
 
 _TQDM_BAR_FORMAT = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
@@ -43,6 +49,26 @@ def _extract_answer(response: str) -> Optional[str]:
         m3 = re.search(r"[A-Za-z]", last_box)
         if m3:
             return m3.group(0).upper()
+
+    simple_match = re.search(r"Assistant:\s*The answer is\s*([A-E])\b", response, re.IGNORECASE)
+    if simple_match:
+        return simple_match.group(1).upper()
+
+    answer_is_match = re.search(r"answer\s+is\s*\*{0,2}\s*\(?([A-E])\)?", response, re.IGNORECASE)
+    if answer_is_match:
+        return answer_is_match.group(1).upper()
+
+    choice_match = re.search(r"\b([A-E])\.\s", response)
+    if choice_match:
+        return choice_match.group(1).upper()
+
+    md_choice_match = re.search(r"\*{1,2}\s*\(?([A-E])\)?", response, re.IGNORECASE)
+    if md_choice_match:
+        return md_choice_match.group(1).upper()
+
+    simple_token = re.match(r"^\s*([A-E])\s*$", response, re.IGNORECASE | re.MULTILINE)
+    if simple_token:
+        return simple_token.group(1).upper()
     return None
 
 
@@ -69,6 +95,18 @@ def _extract_numeric(response: str) -> Optional[str]:
         if m:
             return m.group(1)
 
+    simple_match = re.search(r"Assistant:\s*The answer is\s*(-?\d+)\b", response, re.IGNORECASE)
+    if simple_match:
+        return simple_match.group(1)
+
+    number_match = re.search(r"\b(-?\d+)\b", response)
+    if number_match:
+        return number_match.group(1)
+
+    simple_token = re.match(r"^\s*(-?\d+)\s*$", response, re.MULTILINE)
+    if simple_token:
+        return simple_token.group(1)
+
     for line in reversed([ln.strip() for ln in response.splitlines() if ln.strip()]):
         m = re.search(r"(-?\d+)", line)
         if m:
@@ -78,7 +116,7 @@ def _extract_numeric(response: str) -> Optional[str]:
 
 def _build_eval_samples(
     dim: int,
-    reasoning: bool,
+    reasoning: bool | str,
     questions_csv_path: str,
     numeric_csv_path: str,
 ) -> List[Dict[str, str]]:
@@ -97,16 +135,23 @@ def _build_eval_samples(
             answer = (row.get("answer") or "").strip()
             if not answer:
                 continue
-            rows.append(
-                {
-                    "task_type": "mc",
-                    "type": type_key,
-                    "source_file": questions_csv_path,
-                    "question": question,
-                    "prompt": make_prompt_mc(question, type_key, reasoning=reasoning),
-                    "answer": answer,
-                }
-            )
+            variants = make_prompt_mc_variants(question, type_key, reasoning=reasoning)
+            for variant in variants:
+                remapped = remap_answer_for_rotation(
+                    answer,
+                    int(variant["rotation"]),
+                    int(variant["num_choices"]),
+                )
+                rows.append(
+                    {
+                        "task_type": "mc",
+                        "type": type_key,
+                        "source_file": questions_csv_path,
+                        "question": question,
+                        "prompt": str(variant["prompt"]),
+                        "answer": remapped,
+                    }
+                )
 
     if os.path.exists(numeric_csv_path):
         with open(numeric_csv_path, "r", encoding="utf-8", newline="") as f:
@@ -168,8 +213,9 @@ def run_ablation_eval_with_report(
     numeric_csv_path: str,
     output_dir: str,
     generation: Dict,
+    model_name: str = "",
 ) -> Dict:
-    reasoning = prompt_type == "with_reasoning"
+    prompt_key = prompt_type
     os.makedirs(output_dir, exist_ok=True)
 
     fieldnames = [
@@ -201,12 +247,13 @@ def run_ablation_eval_with_report(
     ):
         samples = _build_eval_samples(
             dim=dim,
-            reasoning=reasoning,
+            reasoning=prompt_key,
             questions_csv_path=questions_csv_path,
             numeric_csv_path=numeric_csv_path,
         )
         prompts = [row["prompt"] for row in samples]
-        responses = response_fn(prompts) if prompts else []
+        formatted_prompts = [apply_chat_template(p, model_name) for p in prompts] if model_name else prompts
+        responses = response_fn(formatted_prompts) if formatted_prompts else []
 
         per_question_records: List[Dict[str, str]] = []
         stats_by_type: Dict[str, Dict[str, int]] = {}

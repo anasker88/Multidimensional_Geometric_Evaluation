@@ -14,7 +14,7 @@ from tqdm.auto import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from prompting import make_prompt_mc, make_prompt_numeric
+from prompting import make_prompt_mc, make_prompt_mc_variants, make_prompt_numeric
 from validation.ablation_eval import run_ablation_eval_with_report
 from validation.activation_io import ensure_feature_activations
 from validation.probe import run_probe_and_report, run_random_probe_baseline_and_report
@@ -66,7 +66,6 @@ def _read_correct_prompt_sets(
 	dims: List[int],
 	prompt_type: str,
 ) -> Dict[int, set[str]]:
-	reasoning = prompt_type == "with_reasoning"
 	result: Dict[int, set[str]] = {}
 	for dim in dims:
 		correct_path = os.path.join(results_dir, f"dim_{dim}_correct.csv")
@@ -96,10 +95,12 @@ def _read_correct_prompt_sets(
 					continue
 
 				if type_key == "numeric":
-					prompt = make_prompt_numeric(question, reasoning=reasoning)
+					prompt = make_prompt_numeric(question, reasoning=prompt_type)
+					prompts.add(prompt)
 				else:
-					prompt = make_prompt_mc(question, type_key, reasoning=reasoning)
-				prompts.add(prompt)
+					variants = make_prompt_mc_variants(question, type_key, reasoning=prompt_type)
+					for variant in variants:
+						prompts.add(str(variant["prompt"]))
 		result[dim] = prompts
 
 	return result
@@ -222,11 +223,15 @@ def _run_batched_generation_with_ablation(
 			)
 			with hook_ctx:
 				for prompt in batch_prompts:
-					# HookedTransformer/transformer-lens requires top_k>0.
-					# If CLI passed 0 (meaning "no top-k" for vLLM), fall back to 1
-					# here to avoid assertions in sampling while keeping sampling narrow.
-					effective_top_k = top_k if top_k and top_k > 0 else 1
-					generated = visualizer.model.generate(
+					# transformer-lens: top_k=None means "sample from all tokens" (no limit),
+					# matching vLLM's top_k=0 semantics.
+					effective_top_k = top_k if top_k and top_k > 0 else None
+					# generate() with return_type="str" decodes input+output together, so
+					# special tokens stripped by skip_special_tokens=True prevent reliable
+					# prefix removal. Instead, use return_type="tokens" and slice off the
+					# input to decode only the newly generated tokens.
+					n_input = visualizer.model.to_tokens(prompt).shape[1]
+					generated_ids = visualizer.model.generate(
 						prompt,
 						max_new_tokens=max_new_tokens,
 						do_sample=do_sample,
@@ -235,17 +240,13 @@ def _run_batched_generation_with_ablation(
 						temperature=temperature,
 						freq_penalty=freq_penalty,
 						stop_at_eos=True,
-						return_type="str",
+						return_type="tokens",
 						verbose=False,
 					)
-
-					if isinstance(generated, str):
-						output_text = generated
-					else:
-						output_text = generated[0] if isinstance(generated, list) else str(generated)
-
-					if prompt and output_text.startswith(prompt):
-						output_text = output_text[len(prompt) :]
+					new_token_ids = generated_ids[0, n_input:]
+					output_text = visualizer.model.tokenizer.decode(
+						new_token_ids, skip_special_tokens=True
+					)
 					batch_outputs.append(output_text.strip())
 					prompt_bar.update(1)
 
@@ -444,7 +445,7 @@ def main() -> None:
 	parser.add_argument(
 		"--prompt-type",
 		default="auto",
-		choices=["auto", "with_reasoning", "without_reasoning"],
+		choices=["auto", "with_reasoning", "without_reasoning", "simple_prompt"],
 		help="Prompt type to align with activation files",
 	)
 	parser.add_argument(
@@ -488,7 +489,7 @@ def main() -> None:
 	parser.add_argument(
 		"--activation-reasoning",
 		default="without",
-		choices=["with", "without", "both"],
+		choices=["with", "without", "both", "simple"],
 		help="Prompt style used when generating activations",
 	)
 	parser.add_argument(
@@ -912,6 +913,7 @@ def main() -> None:
 					numeric_csv_path=args.ablation_numeric_csv,
 					output_dir=baseline_out_dir,
 					generation=generation_cfg,
+					model_name=args.model_name,
 				)
 				baseline_stats["ablation_features"] = []
 				baseline_stats["num_ablation_features"] = 0
@@ -938,6 +940,7 @@ def main() -> None:
 						numeric_csv_path=args.ablation_numeric_csv,
 						output_dir=method_out_dir,
 						generation=generation_cfg,
+						model_name=args.model_name,
 					)
 					stats["ablation_features"] = [int(i) for i in sorted(set(feature_indices))]
 					stats["num_ablation_features"] = len(set(feature_indices))
