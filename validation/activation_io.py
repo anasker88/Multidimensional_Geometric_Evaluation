@@ -9,6 +9,12 @@ import torch
 from sae_lens import SAE, HookedSAETransformer
 from transformers import AutoModelForCausalLM
 
+try:
+    from sae_lens import SAETransformerBridge
+    _HAS_BRIDGE = True
+except ImportError:
+    _HAS_BRIDGE = False
+
 from prompting import (
 	make_prompt_mc,
 	make_prompt_mc_variants,
@@ -179,9 +185,22 @@ def _pool_acts(acts: torch.Tensor, mode: str) -> torch.Tensor:
 	raise ValueError(f"Unknown pooling mode: {mode}")
 
 
+def _get_sae_acts_key(model, sae: SAE, hook_name: str) -> str:
+    """Return the cache key for hook_sae_acts_post.
+
+    SAETransformerBridge resolves alias hook names (e.g. blocks.17.hook_resid_post)
+    to canonical names (e.g. blocks.17.hook_out) before registering SAE internal hooks,
+    so the cache key differs from the alias-based name used by HookedSAETransformer.
+    """
+    try:
+        return model.get_sae_hook_name(sae)
+    except AttributeError:
+        return hook_name + ".hook_sae_acts_post"
+
+
 @torch.no_grad()
 def _compute_feature_activations(
-	model: HookedSAETransformer,
+	model,
 	sae: SAE,
 	prompts: List[str],
 	batch_size: int,
@@ -194,7 +213,7 @@ def _compute_feature_activations(
 	if hook_name is None:
 		raise ValueError("Could not resolve SAE hook name from config.")
 
-	hook_point = hook_name + ".hook_sae_acts_post"
+	hook_point = _get_sae_acts_key(model, sae, hook_name)
 	hook_layer = getattr(sae.cfg, "hook_layer", None)
 	if hook_layer is None:
 		m = re.search(r"blocks\.(\d+)\.", hook_name)
@@ -245,6 +264,7 @@ def _load_sae_and_model(
 	sae_release: str,
 	sae_id: str,
 	device: str,
+	dtype: str | None = None,
 ) -> Tuple[SAE, HookedSAETransformer]:
 	model_name_for_load = model_name_override or model_name
 	use_hf_model = model_name_override is not None and model_name_override != model_name
@@ -266,18 +286,32 @@ def _load_sae_and_model(
 	else:
 		sae = SAE.from_pretrained(sae_release, sae_id, device=device)
 
-	model_kwargs = getattr(sae.cfg, "model_from_pretrained_kwargs", None) or {}
+	# sae_lens >=6.44: model_from_pretrained_kwargs moved from cfg to cfg.metadata
+	model_kwargs = (
+		getattr(sae.cfg.metadata, "model_from_pretrained_kwargs", None)
+		or getattr(sae.cfg, "model_from_pretrained_kwargs", None)
+		or {}
+	)
+	# CLI --dtype overrides SAE config dtype (useful when SAE config lacks dtype)
+	if dtype is not None:
+		torch_dtype = getattr(torch, dtype) if isinstance(dtype, str) else dtype
+		model_kwargs = {**model_kwargs, "dtype": torch_dtype}
 	if hf_model is not None:
 		model_kwargs = {**model_kwargs, "hf_model": hf_model}
 	model_loader = getattr(HookedSAETransformer, "from_pretrained_no_processing", None)
-	if callable(model_loader):
-		model = model_loader(model_name_for_load, device=device, **model_kwargs)
-	else:
-		model = HookedSAETransformer.from_pretrained(
-			model_name_for_load,
-			device=device,
-			hf_model=hf_model,
-		)
+	try:
+		if callable(model_loader):
+			model = model_loader(model_name_for_load, device=device, **model_kwargs)
+		else:
+			model = HookedSAETransformer.from_pretrained(
+				model_name_for_load,
+				device=device,
+				hf_model=hf_model,
+			)
+	except ValueError:
+		if not _HAS_BRIDGE:
+			raise
+		model = SAETransformerBridge.boot_transformers(model_name_for_load, device=device, **model_kwargs)
 	return sae, model
 
 

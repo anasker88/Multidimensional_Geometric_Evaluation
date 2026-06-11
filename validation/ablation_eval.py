@@ -58,7 +58,7 @@ def _extract_answer(response: str) -> Optional[str]:
     if answer_is_match:
         return answer_is_match.group(1).upper()
 
-    choice_match = re.search(r"\b([A-E])\.\s", response)
+    choice_match = re.search(r"\b([A-E])[.:](?:\s|$)", response, re.MULTILINE)
     if choice_match:
         return choice_match.group(1).upper()
 
@@ -66,7 +66,7 @@ def _extract_answer(response: str) -> Optional[str]:
     if md_choice_match:
         return md_choice_match.group(1).upper()
 
-    simple_token = re.match(r"^\s*([A-E])\s*$", response, re.IGNORECASE | re.MULTILINE)
+    simple_token = re.search(r"^\s*([A-E])\s*$", response, re.IGNORECASE | re.MULTILINE)
     if simple_token:
         return simple_token.group(1).upper()
     return None
@@ -228,6 +228,7 @@ def run_ablation_eval_with_report(
         "predicted_raw",
         "predicted_normalized",
         "is_correct",
+        "input",
         "response",
     ]
 
@@ -252,14 +253,14 @@ def run_ablation_eval_with_report(
             numeric_csv_path=numeric_csv_path,
         )
         prompts = [row["prompt"] for row in samples]
-        formatted_prompts = [apply_chat_template(p, model_name) for p in prompts] if model_name else prompts
+        formatted_prompts = [apply_chat_template(p, model_name) for p in prompts]
         responses = response_fn(formatted_prompts) if formatted_prompts else []
 
         per_question_records: List[Dict[str, str]] = []
         stats_by_type: Dict[str, Dict[str, int]] = {}
         confusion_by_type: Dict[str, Dict] = {}
 
-        for sample, response in zip(samples, responses):
+        for sample, formatted_prompt, response in zip(samples, formatted_prompts, responses):
             t = sample["type"]
             stats_by_type.setdefault(t, {"correct": 0, "total": 0})
             stats_by_type[t]["total"] += 1
@@ -317,6 +318,7 @@ def run_ablation_eval_with_report(
                     "predicted_raw": predicted_raw,
                     "predicted_normalized": predicted_normalized,
                     "is_correct": "1" if is_correct else "0",
+                    "input": formatted_prompt,
                     "response": response,
                 }
             )

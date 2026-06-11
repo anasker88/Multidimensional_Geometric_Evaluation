@@ -22,7 +22,7 @@ Nothing else should appear inside <answer> tags.
 Question:
 """,
     "simple_prompt": """System: You are a helpful assistant for solving geometry problems.
-User: Answer the following geometry question by selecting one option.
+User: Answer the following geometry question by selecting one option. Begin your response with the option letter only (A, B, C, or D).
 """,
 }
 
@@ -63,7 +63,7 @@ Do not include units or explanatory text inside the tags.
 Question:
 """,
     "simple_prompt": """System: You are a helpful assistant for solving geometry problems.
-User: Answer the following geometry question with a numeric answer.
+User: Answer the following geometry question with a numeric answer. Begin your response with the number only.
 If the answer is a multiple of π or π^2, output the numeric multiplier (e.g. 12 for 12π).
 """,
 }
@@ -251,19 +251,27 @@ _SYSTEM_MESSAGE = (
     "You may explain your reasoning after the answer."
 )
 
-# Matches the completion-style suffix appended by simple_prompt:
-#   "\nAssistant: The answer is\n"
+# Matches the completion-style suffix appended by simple_prompt.
+# MC prompts use "The answer is option"; numeric prompts use "The answer is".
 _SIMPLE_PROMPT_SUFFIX_RE = re.compile(
-    r"\nAssistant:\s*(The answer is)\s*$", re.IGNORECASE
+    r"\nAssistant:\s*(The answer is(?:\s+option)?)\s*$", re.IGNORECASE
+)
+
+# Parses "System: <sys>\nUser: <user>" structure embedded in simple_prompt.
+_SIMPLE_PROMPT_ROLES_RE = re.compile(
+    r"^System:\s*(.*?)\nUser:\s*(.*)",
+    re.DOTALL,
 )
 
 
 def apply_chat_template(prompt: str, model_name: str) -> str:
     """Wrap a raw prompt string in the model's chat template.
 
-    For simple_prompt format (ends with "Assistant: The answer is"), the suffix
-    is extracted and injected as an assistant prefill so the model completes it
-    directly — preserving the completion-style behavior without a chat template.
+    For simple_prompt format (ends with "Assistant: The answer is"), the
+    embedded System:/User: markers are parsed into proper chat roles, and
+    "The answer is" is injected as an assistant prefill.
+    For models that don't support the system role (e.g. Gemma), the system
+    message is prepended to the user message instead.
 
     For with_reasoning / without_reasoning prompts, no system message is added.
 
@@ -279,15 +287,39 @@ def apply_chat_template(prompt: str, model_name: str) -> str:
 
     m = _SIMPLE_PROMPT_SUFFIX_RE.search(prompt)
     if m:
-        # simple_prompt: inject "The answer is" as assistant prefill.
-        # We apply the template with add_generation_prompt=True (which appends the
-        # assistant turn opening token), then manually append the prefill text so
-        # the model continues within the assistant turn — no closing token is added.
         user_content = prompt[: m.start()].strip()
         prefill = m.group(1)  # "The answer is"
+
+        # Parse embedded System:/User: roles from simple_prompt format.
+        sm = _SIMPLE_PROMPT_ROLES_RE.match(user_content)
+        if sm:
+            sys_msg = sm.group(1).strip()
+            user_msg = sm.group(2).strip()
+        else:
+            sys_msg = None
+            user_msg = user_content
+
+        # Try with explicit system role.
+        if sys_msg:
+            try:
+                base = tok.apply_chat_template(
+                    [
+                        {"role": "system", "content": sys_msg},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                return base + prefill
+            except Exception:
+                pass
+
+        # Fallback: prepend system to user for models that don't support
+        # the system role (e.g. Gemma raises an exception for it).
+        combined = (sys_msg + "\n\n" + user_msg) if sys_msg else user_msg
         try:
             base = tok.apply_chat_template(
-                [{"role": "user", "content": user_content}],
+                [{"role": "user", "content": combined}],
                 tokenize=False,
                 add_generation_prompt=True,
             )

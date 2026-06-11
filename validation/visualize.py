@@ -11,6 +11,12 @@ import torch
 from matplotlib.colors import Normalize
 from sae_lens import SAE, HookedSAETransformer
 
+try:
+    from sae_lens import SAETransformerBridge
+    _HAS_BRIDGE = True
+except ImportError:
+    _HAS_BRIDGE = False
+
 
 def _question_answer_span(prompt: str) -> Tuple[int, int]:
 	# Preferred format in current prompts:
@@ -285,9 +291,17 @@ class TokenActivationVisualizer:
 		else:
 			sae = SAE.from_pretrained(sae_release, sae_id, device=device)
 
-		model = HookedSAETransformer.from_pretrained(model_name, device=device)
+		try:
+			model = HookedSAETransformer.from_pretrained(model_name, device=device)
+		except ValueError:
+			if not _HAS_BRIDGE:
+				raise
+			model = SAETransformerBridge.boot_transformers(model_name, device=device)
 		hook_name, hook_layer = _resolve_hook_info(sae)
-		hook_point = hook_name + ".hook_sae_acts_post"
+		try:
+			hook_point = model.get_sae_hook_name(sae)
+		except AttributeError:
+			hook_point = hook_name + ".hook_sae_acts_post"
 		stop_at_layer = hook_layer + 1 if hook_layer is not None else None
 		return cls(
 			model=model,

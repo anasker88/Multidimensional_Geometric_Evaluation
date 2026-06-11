@@ -12,6 +12,7 @@ from collections import OrderedDict
 from vllm import LLM, SamplingParams
 import argparse
 import sys
+from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -20,7 +21,6 @@ from prompting import (
     make_prompt_mc,
     make_prompt_mc_variants,
     make_prompt_numeric,
-    needs_chat_template as _needs_chat_template,
     remap_answer_for_rotation,
 )
 
@@ -56,6 +56,7 @@ def chat(
     top_p: float = 0.9,
     temperature: float = 0.1,
     repetition_penalty: float = 1.1,
+    desc: str = "",
 ) -> List[str]:
     responses: List[str] = []
 
@@ -104,17 +105,10 @@ def chat(
 
     batch_num = (len(prompts) + batch_size - 1) // batch_size
 
-    for i in range(batch_num):
+    for i in tqdm(range(batch_num), desc=desc or "batches", unit="batch", leave=False):
         batch_prompts = prompts[i * batch_size: (i + 1) * batch_size]
 
         if isinstance(model, LLM):
-            # Apply the model's chat template to every prompt so that
-            # instruction-tuned models (e.g. Gemma-2-it) receive properly
-            # formatted input and do not produce empty outputs.
-            templated_prompts = [
-                _apply_chat_template(p, model_name or "") for p in batch_prompts
-            ]
-
             try:
                 sampling_params = SamplingParams(
                     temperature=temperature,
@@ -124,7 +118,7 @@ def chat(
                     max_tokens=max_new_tokens,
                     min_tokens=1,
                 )
-                outputs = model.generate(templated_prompts, sampling_params=sampling_params, use_tqdm=False)
+                outputs = model.generate(batch_prompts, sampling_params=sampling_params, use_tqdm=False)
             except RuntimeError as e:
                 err = str(e).lower()
                 if "out of memory" in err or "cuda out of memory" in err:
@@ -141,7 +135,7 @@ def chat(
                             max_tokens=max(32, max_new_tokens // 4),
                             min_tokens=1,  # Fix: was missing in OOM fallback
                         )
-                        outputs = model.generate(templated_prompts, sampling_params=sampling_params, use_tqdm=False)
+                        outputs = model.generate(batch_prompts, sampling_params=sampling_params, use_tqdm=False)
                     except Exception:
                         outputs = None
                 else:
@@ -162,7 +156,10 @@ def chat(
                     batch_responses.append(text.strip())
                 allow_retry = True
         else:
-            inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True)
+            # Strip <think> from assistant prefix so decoder-only models
+            # generate direct answers rather than extended reasoning chains.
+            clean_batch = [p.replace("\n<think>\n", "\n") for p in batch_prompts]
+            inputs = tokenizer(clean_batch, return_tensors="pt", padding=True, truncation=True)
             inputs = {k: v.to(device) for k, v in inputs.items()}
             try:
                 outputs = model.generate(
@@ -201,11 +198,10 @@ def chat(
                 batch_responses = ["" for _ in batch_prompts]
                 allow_retry = False
             else:
-                batch_responses = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-                batch_responses = [
-                    _strip_prompt_echo(prompt, resp)
-                    for resp, prompt in zip(batch_responses, batch_prompts)
-                ]
+                input_length = inputs["input_ids"].shape[1]
+                new_tokens = outputs[:, input_length:]
+                batch_responses = tokenizer.batch_decode(new_tokens, skip_special_tokens=True)
+                batch_responses = [r.strip() for r in batch_responses]
                 allow_retry = True
 
         if allow_retry:
@@ -213,9 +209,6 @@ def chat(
             if empty_idxs:
                 retry_prompts_raw = [batch_prompts[idx] for idx in empty_idxs]
                 if isinstance(model, LLM):
-                    retry_prompts = [
-                        _apply_chat_template(p, model_name or "") for p in retry_prompts_raw
-                    ]
                     retry_params = SamplingParams(
                         temperature=0.0,
                         top_p=1.0,
@@ -225,7 +218,7 @@ def chat(
                         min_tokens=1,
                     )
                     try:
-                        retry_outputs = model.generate(retry_prompts, sampling_params=retry_params, use_tqdm=False)
+                        retry_outputs = model.generate(retry_prompts_raw, sampling_params=retry_params, use_tqdm=False)
                     except Exception:
                         retry_outputs = None
                     if retry_outputs is not None:
@@ -300,7 +293,7 @@ def extract_answer(response: str) -> Optional[str]:
     if answer_is_match:
         return answer_is_match.group(1).upper()
 
-    choice_match = re.search(r"\b([A-E])\.\s", response)
+    choice_match = re.search(r"\b([A-E])[.:](?:\s|$)", response, re.MULTILINE)
     if choice_match:
         return choice_match.group(1).upper()
 
@@ -308,7 +301,22 @@ def extract_answer(response: str) -> Optional[str]:
     if md_choice_match:
         return md_choice_match.group(1).upper()
 
-    simple_token = re.match(r"^\s*([A-E])\s*$", response, re.IGNORECASE | re.MULTILINE)
+    # Quoted letter: “B” or 'B' at the start of the response (e.g. Qwen3 style)
+    quoted_match = re.match(r'[“””\']\s*([A-E])\s*[“””\']', response.strip(), re.IGNORECASE)
+    if quoted_match:
+        return quoted_match.group(1).upper()
+
+    # Letter in parentheses: (B)
+    paren_match = re.search(r'\(([A-E])\)', response, re.IGNORECASE)
+    if paren_match:
+        return paren_match.group(1).upper()
+
+    # Letter at start of response followed by space/period (e.g. “A Perpendicular.”)
+    start_match = re.match(r'^([A-E])[\s.,]', response.strip(), re.IGNORECASE)
+    if start_match:
+        return start_match.group(1).upper()
+
+    simple_token = re.search(r"^\s*([A-E])\s*$", response, re.IGNORECASE | re.MULTILINE)
     if simple_token:
         return simple_token.group(1).upper()
     return None
@@ -455,8 +463,9 @@ def evaluate(
     per_type_stats: List[Tuple[str, int, int, float]] = []
     per_question_records: List[Dict[str, str]] = []
 
+    type_keys = sorted(per_type_data.keys(), key=lambda x: (x == "unknown", x))
     with open(log_path, "w", encoding="utf-8") as log_file:
-        for type_key in sorted(per_type_data.keys(), key=lambda x: (x == "unknown", x)):
+        for type_key in tqdm(type_keys, desc=f"dim{dim}", unit="type"):
             prompts = per_type_data[type_key]["prompts"]
             answers = per_type_data[type_key]["answers"]
             n = len(prompts)
@@ -475,8 +484,9 @@ def evaluate(
             else:
                 confusion_matrix = None
 
+            formatted_prompts = [_apply_chat_template(p, model_name) for p in prompts]
             responses = chat(
-                prompts,
+                formatted_prompts,
                 model_name=model_name,
                 model=model,
                 tokenizer=tokenizer,
@@ -487,11 +497,12 @@ def evaluate(
                 top_p=top_p,
                 temperature=temperature,
                 repetition_penalty=repetition_penalty,
+                desc=f"{dim}D/{type_key}",
             )
 
             correct = 0
             rows = per_type_data[type_key]["rows"]
-            for prompt, response, true_raw, row in zip(prompts, responses, answers, rows):
+            for prompt, formatted_prompt, response, true_raw, row in zip(prompts, formatted_prompts, responses, answers, rows):
                 log_file.write(f"Type: {type_key}\n")
                 log_file.write(f"Question: {prompt}\n")
                 log_file.write(f"Response: {response}\n")
@@ -563,6 +574,7 @@ def evaluate(
                         "predicted_raw": predicted_raw,
                         "predicted_normalized": predicted_normalized,
                         "is_correct": "1" if is_correct else "0",
+                        "input": formatted_prompt,
                         "response": response,
                     }
                 )
@@ -604,6 +616,7 @@ def evaluate(
         "predicted_raw",
         "predicted_normalized",
         "is_correct",
+        "input",
         "response",
     ]
 
@@ -710,9 +723,10 @@ if __name__ == "__main__":
         with open(result_path, "w", encoding="utf-8") as _rf:
             _rf.write("")
 
-        for dim in dims:
+        for dim in tqdm(dims, desc=model_name.split("/")[-1], unit="dim"):
             print(f"Evaluating {model_name} for {dim} dimensions...")
             model = None
+            tokenizer_obj = None
             if model_name not in ["gpt-4o", "gpt-4o-mini", "o1", "gpt-5"]:
                 preferred_dtype = getattr(args, "dtype", "bfloat16")
                 gpu_mem_util = getattr(args, "gpu_memory_utilization", 0.7)
@@ -738,12 +752,34 @@ if __name__ == "__main__":
                         break
                 if model is None and last_exc is not None:
                     print(f"Warning: could not initialize vLLM for {model_name}: {last_exc}", file=sys.stderr)
+                    # Fallback to HuggingFace Transformers
+                    try:
+                        from transformers import AutoModelForCausalLM, AutoTokenizer
+                        print(f"Trying HuggingFace Transformers fallback for {model_name}...", file=sys.stderr)
+                        tokenizer_obj = AutoTokenizer.from_pretrained(model_name)
+                        tokenizer_obj.padding_side = "left"
+                        if tokenizer_obj.pad_token_id is None:
+                            tokenizer_obj.pad_token_id = tokenizer_obj.eos_token_id
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_name, torch_dtype=torch.bfloat16, device_map="auto"
+                        )
+                        print(f"HuggingFace Transformers fallback succeeded for {model_name}", file=sys.stderr)
+                    except Exception as hf_exc:
+                        print(f"Warning: HuggingFace fallback also failed for {model_name}: {hf_exc}", file=sys.stderr)
+                        model = None
+                        tokenizer_obj = None
+
+                # If both vLLM and HF failed for a local model, skip rather than
+                # falling through to the Azure API path with a wrong deployment name.
+                if model is None:
+                    print(f"Skipping {model_name} dim {dim}: no local model available.", file=sys.stderr)
+                    continue
 
             evaluate(
                 dim,
                 model_name=model_name,
                 model=model,
-                tokenizer=None,
+                tokenizer=tokenizer_obj,
                 batch_size=args.batch_size,
                 max_new_tokens=args.max_new_tokens,
                 do_sample=not args.greedy,
@@ -759,6 +795,7 @@ if __name__ == "__main__":
 
             try:
                 del model
+                del tokenizer_obj
             except Exception:
                 pass
             import gc
