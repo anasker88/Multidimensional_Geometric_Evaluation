@@ -24,6 +24,9 @@ Question:
     "simple_prompt": """System: You are a helpful assistant for solving geometry problems.
 User: Answer the following geometry question by selecting one option. Begin your response with the option letter only (A, B, C, or D).
 """,
+    "simple_prompt_strict": """System: You are a geometry problem solver. You MUST always select one of the listed answer choices — never say the answer is unavailable or not among the options. If unsure, pick the closest option.
+User: Answer the geometry question below by choosing the best option from those listed. Output ONLY the single letter of your choice — no explanation, no punctuation, nothing else.
+""",
 }
 
 postlude_explanations = {
@@ -36,6 +39,9 @@ Output the answer tag on the last line.
     "simple_prompt": """
 Assistant: The answer is
 """,
+    "simple_prompt_strict": """
+Assistant: The answer is
+""",
 }
 
 options = [
@@ -43,6 +49,17 @@ options = [
     "\nAnswer choices: A. Intersecting B. Not intersecting C. Cannot be inferred",
     "\nAnswer choices: A. Yes B. No C. Cannot be inferred",
 ]
+
+# Footnote describing how vertices of the higher-dimensional figures are labeled
+# and which vertices are adjacent. Injected into every question prompt so that
+# the polytope-labeling questions (rectangular solids, tesseracts, hyperplanes)
+# are unambiguous. Contains no "{...}" so it can be concatenated outside .format().
+labeling_convention = """
+Labeling conventions:
+- A prism/box written as "X1X2...Xn-Y1Y2...Yn" (e.g. rectangular solid ABEF-GHIJ) lists corresponding vertices in order: each Xi is joined to Yi by an edge, so Xi-Xj and Yi-Yj are corresponding (parallel) edges.
+- A tesseract / 4-polytope written as "(cell1)-(cell2)" (e.g. (ABEF-GHIJ)-(KLMN-OPQR)) is two corresponding cells; matching vertices of cell1 and cell2 are joined across the 4th direction.
+- A face, cell, or hyperplane is named by listing its vertices (e.g. plane GHI, 3D hyperplane GHIO, or an 8-vertex bounding cell such as 3D hyperplane ABCDMNOP).
+"""
 
 numeric_preludes = {
     "with_reasoning": """You are evaluating a numeric geometry question.
@@ -64,6 +81,10 @@ Question:
 """,
     "simple_prompt": """System: You are a helpful assistant for solving geometry problems.
 User: Answer the following geometry question with a numeric answer. Begin your response with the number only.
+If the answer is a multiple of π or π^2, output the numeric multiplier (e.g. 12 for 12π).
+""",
+    "simple_prompt_strict": """System: You are a geometry problem solver. Output only a number.
+User: Answer the geometry question below with a number only. Begin your response with the number only.
 If the answer is a multiple of π or π^2, output the numeric multiplier (e.g. 12 for 12π).
 """,
 }
@@ -160,7 +181,7 @@ def make_prompt_mc(
         choices = ", ".join([chr(ord("A") + i) for i in range(len(rotated_choices))])
     else:
         choices = derive_choices_text(opt)
-    return prelude_explanations[key].format(choices=choices) + question + opt + postlude_explanations[key]
+    return prelude_explanations[key].format(choices=choices) + labeling_convention + question + opt + postlude_explanations[key]
 
 
 def make_prompt_mc_variants(
@@ -199,7 +220,7 @@ def make_prompt_mc_variants(
 def make_prompt_numeric(question: str, reasoning: bool | str = True) -> str:
     """Build a numeric prompt."""
     key = resolve_prompt_key(reasoning)
-    prompt = numeric_preludes[key] + "\n" + question
+    prompt = numeric_preludes[key] + labeling_convention + "\n" + question
     if key == "simple_prompt":
         prompt += postlude_explanations[key]
     return prompt
@@ -301,35 +322,42 @@ def apply_chat_template(prompt: str, model_name: str) -> str:
 
         # Try with explicit system role.
         if sys_msg:
-            try:
-                base = tok.apply_chat_template(
-                    [
-                        {"role": "system", "content": sys_msg},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-                return base + prefill
-            except Exception:
-                pass
+            for kwargs in [{"enable_thinking": False}, {}]:
+                try:
+                    base = tok.apply_chat_template(
+                        [
+                            {"role": "system", "content": sys_msg},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        tokenize=False,
+                        add_generation_prompt=True,
+                        **kwargs,
+                    )
+                    # Strip any <think>...</think> or dangling <think> from the assistant prefix
+                    base = base.replace("<think>\n", "").replace("<think>", "")
+                    return base + prefill
+                except Exception:
+                    pass
 
         # Fallback: prepend system to user for models that don't support
         # the system role (e.g. Gemma raises an exception for it).
         combined = (sys_msg + "\n\n" + user_msg) if sys_msg else user_msg
-        try:
-            base = tok.apply_chat_template(
-                [{"role": "user", "content": combined}],
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-            return base + prefill
-        except Exception as e:
-            print(
-                f"Warning: apply_chat_template failed for {model_name}: {e}",
-                file=sys.stderr,
-            )
-            return prompt
+        for kwargs in [{"enable_thinking": False}, {}]:
+            try:
+                base = tok.apply_chat_template(
+                    [{"role": "user", "content": combined}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **kwargs,
+                )
+                base = base.replace("<think>\n", "").replace("<think>", "")
+                return base + prefill
+            except Exception as e:
+                print(
+                    f"Warning: apply_chat_template failed for {model_name}: {e}",
+                    file=sys.stderr,
+                )
+        return prompt
 
     # with_reasoning / without_reasoning: no system message
     try:

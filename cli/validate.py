@@ -445,7 +445,7 @@ def main() -> None:
 	parser.add_argument(
 		"--prompt-type",
 		default="auto",
-		choices=["auto", "with_reasoning", "without_reasoning", "simple_prompt"],
+		choices=["auto", "with_reasoning", "without_reasoning", "simple_prompt", "simple_prompt_strict"],
 		help="Prompt type to align with activation files",
 	)
 	parser.add_argument(

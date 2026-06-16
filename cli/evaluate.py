@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from openai import AzureOpenAI
-from collections import OrderedDict
 from vllm import LLM, SamplingParams
 import argparse
 import sys
@@ -22,6 +21,9 @@ from prompting import (
     make_prompt_mc_variants,
     make_prompt_numeric,
     remap_answer_for_rotation,
+    _choice_count_for_type,
+    _parse_option_choices,
+    options as _option_specs,
 )
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -425,7 +427,10 @@ def evaluate(
             question = row[col_key]
             raw_answer = (row.get("answer") or "").strip()
             type_key = (row.get("type") or "unknown").strip() or "unknown"
-            per_type_data.setdefault(type_key, {"prompts": [], "answers": [], "rows": []})
+            per_type_data.setdefault(
+                type_key,
+                {"prompts": [], "answers": [], "rows": [], "rotations": [], "num_choices": [], "canon_answers": []},
+            )
             variants = make_prompt_mc_variants(question, type_key, reasoning=prompt_key)
             for variant in variants:
                 remapped = remap_answer_for_rotation(
@@ -436,6 +441,12 @@ def evaluate(
                 per_type_data[type_key]["prompts"].append(str(variant["prompt"]))
                 per_type_data[type_key]["answers"].append(remapped)
                 per_type_data[type_key]["rows"].append(row)
+                # Keep rotation / choice count / canonical answer so the confusion
+                # matrix can be tallied in the canonical (pre-rotation, semantic)
+                # frame rather than the presented-slot frame.
+                per_type_data[type_key]["rotations"].append(int(variant["rotation"]))
+                per_type_data[type_key]["num_choices"].append(int(variant["num_choices"]))
+                per_type_data[type_key]["canon_answers"].append(raw_answer)
 
     # add numeric from data/numeric.csv as its own type: "numeric"
     numeric_path = _resolve_data_path(numeric_csv_path)
@@ -453,10 +464,16 @@ def evaluate(
                 ans = (row.get("answer") or "").strip()
                 if not q or not ans:
                     continue
-                per_type_data.setdefault("numeric", {"prompts": [], "answers": [], "rows": []})
+                per_type_data.setdefault(
+                    "numeric",
+                    {"prompts": [], "answers": [], "rows": [], "rotations": [], "num_choices": [], "canon_answers": []},
+                )
                 per_type_data["numeric"]["prompts"].append(make_prompt_numeric(q, reasoning=prompt_key))
                 per_type_data["numeric"]["answers"].append(ans)
                 per_type_data["numeric"]["rows"].append(row)
+                per_type_data["numeric"]["rotations"].append(0)
+                per_type_data["numeric"]["num_choices"].append(0)
+                per_type_data["numeric"]["canon_answers"].append(ans)
 
     total = 0
     total_correct = 0
@@ -473,13 +490,25 @@ def evaluate(
                 continue
 
             labels: List[str] = []
+            label_meanings: List[str] = []
             if type_key != "numeric":
-                seen = OrderedDict()
-                for a in answers:
-                    norm = _normalize_label(a)
-                    if norm:
-                        seen.setdefault(norm, None)
-                labels = sorted(list(seen.keys())) or ["A", "B", "C"]
+                # Canonical (pre-rotation) label set for this type. The confusion
+                # matrix is built in this semantic frame, so a cell (i, j) means
+                # "true meaning i was predicted as meaning j" regardless of which
+                # letter slot each meaning occupied in a given rotated variant.
+                nch = _choice_count_for_type(type_key)
+                if nch <= 0:
+                    nch = 3
+                labels = [chr(ord("A") + i) for i in range(nch)]
+                try:
+                    idx_opt = max(0, min(int(type_key) - 1, len(_option_specs) - 1))
+                    meanings = _parse_option_choices(_option_specs[idx_opt])
+                except Exception:
+                    meanings = []
+                label_meanings = [
+                    f"{labels[i]}. {meanings[i]}" if i < len(meanings) else labels[i]
+                    for i in range(nch)
+                ]
                 confusion_matrix = np.zeros((len(labels), len(labels) + 1), dtype=int)
             else:
                 confusion_matrix = None
@@ -502,7 +531,12 @@ def evaluate(
 
             correct = 0
             rows = per_type_data[type_key]["rows"]
-            for prompt, formatted_prompt, response, true_raw, row in zip(prompts, formatted_prompts, responses, answers, rows):
+            rotations = per_type_data[type_key]["rotations"]
+            nchoices_list = per_type_data[type_key]["num_choices"]
+            canon_answers = per_type_data[type_key]["canon_answers"]
+            for prompt, formatted_prompt, response, true_raw, row, rot, nch_row, canon_ans in zip(
+                prompts, formatted_prompts, responses, answers, rows, rotations, nchoices_list, canon_answers
+            ):
                 log_file.write(f"Type: {type_key}\n")
                 log_file.write(f"Question: {prompt}\n")
                 log_file.write(f"Response: {response}\n")
@@ -547,11 +581,22 @@ def evaluate(
                         correct += 1
                         is_correct = True
 
-                    if confusion_matrix is not None:
-                        if true_label in labels:
-                            t_idx = labels.index(true_label)
-                            if pred_label in labels:
-                                p_idx = labels.index(pred_label)
+                    if confusion_matrix is not None and nch_row > 0:
+                        # Map both the true answer and the prediction back to the
+                        # canonical (pre-rotation) frame so the matrix reflects
+                        # semantic confusion, not letter-slot position.
+                        true_canon = _normalize_label(canon_ans)
+                        pred_canon: Optional[str] = None
+                        if pred_label is not None and len(pred_label) == 1 and pred_label.isalpha():
+                            pidx = ord(pred_label) - ord("A")
+                            if 0 <= pidx < nch_row:
+                                pred_canon = remap_answer_for_rotation(
+                                    pred_label, (nch_row - rot) % nch_row, nch_row
+                                )
+                        if true_canon in labels:
+                            t_idx = labels.index(true_canon)
+                            if pred_canon in labels:
+                                p_idx = labels.index(pred_canon)
                                 confusion_matrix[t_idx, p_idx] += 1
                             else:
                                 confusion_matrix[t_idx, -1] += 1
@@ -590,13 +635,13 @@ def evaluate(
                 with np.errstate(invalid="ignore", divide="ignore"):
                     cm_norm = confusion_matrix / row_sums
                     cm_norm = np.nan_to_num(cm_norm)
-                pred_labels = labels + ["Other"]
+                pred_labels = label_meanings + ["Other / no answer"]
                 plt.imshow(cm_norm, interpolation="nearest", cmap=plt.cm.Blues, vmin=0, vmax=1)
-                plt.xlabel("Predicted Label")
-                plt.ylabel("True Label")
-                plt.xticks(np.arange(len(pred_labels)), pred_labels, rotation=45)
-                plt.yticks(np.arange(len(labels)), labels, rotation=45)
-                plt.title(f"Confusion Matrix - {model_name} - {dim}D - type {type_key}")
+                plt.xlabel("Predicted (canonical meaning)")
+                plt.ylabel("True (canonical meaning)")
+                plt.xticks(np.arange(len(pred_labels)), pred_labels, rotation=45, ha="right")
+                plt.yticks(np.arange(len(label_meanings)), label_meanings)
+                plt.title(f"Confusion Matrix (semantic) - {model_name} - {dim}D - type {type_key}")
                 plt.tight_layout()
                 plt.savefig(os.path.join(output_dir, f"confusion_matrix_{dim}d_type_{type_key}.png"))
                 plt.close()
@@ -667,12 +712,14 @@ if __name__ == "__main__":
     parser.add_argument("--repetition-penalty", type=float, default=1.1, help="Repetition penalty")
     parser.add_argument("--dtype", type=str, default="bfloat16", help="Preferred dtype for vLLM local models: float16|bfloat16|float32")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.7, help="GPU memory utilization fraction for vLLM")
+    parser.add_argument("--tensor-parallel-size", type=int, default=1, help="Number of GPUs for tensor parallelism in vLLM")
+    parser.add_argument("--max-model-len", type=int, default=None, help="Override max model sequence length for vLLM (reduces KV cache usage)")
     parser.add_argument("--no-reasoning", action="store_true", help="Disable chain-of-thought reasoning prompts")
     parser.add_argument(
         "--prompt-type",
         type=str,
         default=None,
-        choices=["with_reasoning", "without_reasoning", "simple_prompt"],
+        choices=["with_reasoning", "without_reasoning", "simple_prompt", "simple_prompt_strict"],
         help="Override prompt style (default: based on --no-reasoning)",
     )
     parser.add_argument("--results-root", type=str, default=RESULTS_ROOT, help="Base directory to write results into")
@@ -741,7 +788,12 @@ if __name__ == "__main__":
                 last_exc = None
                 for dt in dtype_candidates:
                     try:
-                        model = LLM(model=model_name, dtype=dt, gpu_memory_utilization=gpu_mem_util, disable_log_stats=True)
+                        tensor_parallel_size = getattr(args, "tensor_parallel_size", 1)
+                        max_model_len = getattr(args, "max_model_len", None)
+                        llm_kwargs = dict(dtype=dt, gpu_memory_utilization=gpu_mem_util, disable_log_stats=True, tensor_parallel_size=tensor_parallel_size)
+                        if max_model_len is not None:
+                            llm_kwargs["max_model_len"] = max_model_len
+                        model = LLM(model=model_name, **llm_kwargs)
                         break
                     except Exception as e:
                         last_exc = e
