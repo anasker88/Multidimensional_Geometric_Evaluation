@@ -17,9 +17,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from prompting import (
     apply_chat_template as _apply_chat_template,
+    set_reasoning_effort as _set_reasoning_effort,
     make_prompt_mc,
     make_prompt_mc_variants,
     make_prompt_numeric,
+    make_prompt_numeric_mc_variants,
     remap_answer_for_rotation,
     _choice_count_for_type,
     _parse_option_choices,
@@ -269,6 +271,13 @@ def extract_answer(response: str) -> Optional[str]:
     if not response:
         return None
 
+    # gpt-oss harmony format: the committed answer lives in the 'final' channel,
+    # which decodes (special tokens stripped) as '...analysis...assistantfinal<answer>'.
+    # Parse only the final-channel tail so the analysis text is ignored.
+    harmony = re.search(r"assistantfinal\s*(.+)$", response, re.IGNORECASE | re.DOTALL)
+    if harmony:
+        response = harmony.group(1).strip()
+
     tag_matches = re.findall(r"<answer>\s*([^<\n]+?)\s*</answer>", response, re.IGNORECASE)
     if tag_matches:
         val = tag_matches[-1].strip()
@@ -334,6 +343,11 @@ def extract_numeric(response: str) -> Optional[str]:
     """
     if not response:
         return None
+
+    # gpt-oss harmony: prefer the 'final' channel tail (after 'assistantfinal').
+    harmony = re.search(r"assistantfinal\s*(.+)$", response, re.IGNORECASE | re.DOTALL)
+    if harmony:
+        response = harmony.group(1).strip()
 
     tag_matches = re.findall(r"<answer>\s*([^<\n]+?)\s*</answer>", response, re.IGNORECASE)
     if tag_matches:
@@ -475,6 +489,28 @@ def evaluate(
                 per_type_data["numeric"]["num_choices"].append(0)
                 per_type_data["numeric"]["canon_answers"].append(ans)
 
+                # Also build a multiple-choice version of the same numeric
+                # question: correct value + 3 distractors, presented in all
+                # cyclic rotations. The canonical correct slot is "A" (the
+                # value sits at index 0 before rotation). Skipped silently if
+                # distractors can't be built (non-integer answer).
+                mc_variants = make_prompt_numeric_mc_variants(q, ans, reasoning=prompt_key)
+                if mc_variants:
+                    per_type_data.setdefault(
+                        "numeric_mc",
+                        {"prompts": [], "answers": [], "rows": [], "rotations": [], "num_choices": [], "canon_answers": []},
+                    )
+                    for v in mc_variants:
+                        rot = int(v["rotation"])
+                        nch = int(v["num_choices"])
+                        remapped = remap_answer_for_rotation("A", rot, nch)
+                        per_type_data["numeric_mc"]["prompts"].append(str(v["prompt"]))
+                        per_type_data["numeric_mc"]["answers"].append(remapped)
+                        per_type_data["numeric_mc"]["rows"].append(row)
+                        per_type_data["numeric_mc"]["rotations"].append(rot)
+                        per_type_data["numeric_mc"]["num_choices"].append(nch)
+                        per_type_data["numeric_mc"]["canon_answers"].append("A")
+
     total = 0
     total_correct = 0
     per_type_stats: List[Tuple[str, int, int, float]] = []
@@ -491,7 +527,7 @@ def evaluate(
 
             labels: List[str] = []
             label_meanings: List[str] = []
-            if type_key != "numeric":
+            if type_key not in ("numeric", "numeric_mc"):
                 # Canonical (pre-rotation) label set for this type. The confusion
                 # matrix is built in this semantic frame, so a cell (i, j) means
                 # "true meaning i was predicted as meaning j" regardless of which
@@ -601,7 +637,7 @@ def evaluate(
                             else:
                                 confusion_matrix[t_idx, -1] += 1
 
-                if type_key == "numeric":
+                if type_key in ("numeric", "numeric_mc"):
                     question_text = (row.get("question") or "").strip()
                     source_file = numeric_path
                 else:
@@ -714,6 +750,7 @@ if __name__ == "__main__":
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.7, help="GPU memory utilization fraction for vLLM")
     parser.add_argument("--tensor-parallel-size", type=int, default=1, help="Number of GPUs for tensor parallelism in vLLM")
     parser.add_argument("--max-model-len", type=int, default=None, help="Override max model sequence length for vLLM (reduces KV cache usage)")
+    parser.add_argument("--enforce-eager", action="store_true", help="Disable torch.compile/CUDA graphs in vLLM (workaround for unstable MXFP4/MoE kernels)")
     parser.add_argument("--no-reasoning", action="store_true", help="Disable chain-of-thought reasoning prompts")
     parser.add_argument(
         "--prompt-type",
@@ -721,6 +758,13 @@ if __name__ == "__main__":
         default=None,
         choices=["with_reasoning", "without_reasoning", "simple_prompt", "simple_prompt_strict"],
         help="Override prompt style (default: based on --no-reasoning)",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        type=str,
+        default=None,
+        choices=["low", "medium", "high"],
+        help="Reasoning-effort hint for chat templates that support it (e.g. gpt-oss harmony)",
     )
     parser.add_argument("--results-root", type=str, default=RESULTS_ROOT, help="Base directory to write results into")
     parser.add_argument("--timestamp", type=str, default=None, help="Timestamp string to use for this run (default: now)")
@@ -755,6 +799,7 @@ if __name__ == "__main__":
         except Exception:
             print("Invalid timestamp provided; using default.", file=sys.stderr)
     globals()["RESULTS_ROOT"] = args.results_root
+    _set_reasoning_effort(getattr(args, "reasoning_effort", None))
 
     if args.models:
         model_names = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -793,6 +838,8 @@ if __name__ == "__main__":
                         llm_kwargs = dict(dtype=dt, gpu_memory_utilization=gpu_mem_util, disable_log_stats=True, tensor_parallel_size=tensor_parallel_size)
                         if max_model_len is not None:
                             llm_kwargs["max_model_len"] = max_model_len
+                        if getattr(args, "enforce_eager", False):
+                            llm_kwargs["enforce_eager"] = True
                         model = LLM(model=model_name, **llm_kwargs)
                         break
                     except Exception as e:

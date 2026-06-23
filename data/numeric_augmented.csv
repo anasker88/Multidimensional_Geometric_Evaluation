@@ -11,12 +11,12 @@ question,dimension,answer
 "What is the number of edges in a square?",2,4
 "What is the number of edges in a cube?",3,12
 "What is the number of edges in a tesseract?",4,32
-"What is the number of faces in a triangle?",2,1
-"What is the number of faces in a triangular pyramid?",3,4
-"What is the number of faces in a 4-simplex?",4,10
-"What is the number of faces in a square?",2,1
-"What is the number of faces in a cube?",3,6
-"What is the number of faces in a tesseract?",4,24
+"What is the number of 2-dimensional faces in a triangle?",2,1
+"What is the number of 2-dimensional faces in a triangular pyramid?",3,4
+"What is the number of 2-dimensional faces in a 4-simplex?",4,10
+"What is the number of 2-dimensional faces in a square?",2,1
+"What is the number of 2-dimensional faces in a cube?",3,6
+"What is the number of 2-dimensional faces in a tesseract?",4,24
 "How many vertices does a triangle have?",2,3
 "How many vertices does a triangular pyramid have?",3,4
 "How many vertices does a 4-simplex have?",4,5
@@ -29,12 +29,12 @@ question,dimension,answer
 "How many edges does a square have?",2,4
 "How many edges does a cube have?",3,12
 "How many edges does a tesseract have?",4,32
-"How many faces does a triangle have?",2,1
-"How many faces does a triangular pyramid have?",3,4
-"How many faces does a 4-simplex have?",4,10
-"How many faces does a square have?",2,1
-"How many faces does a cube have?",3,6
-"How many faces does a tesseract have?",4,24
+"How many 2-dimensional faces does a triangle have?",2,1
+"How many 2-dimensional faces does a triangular pyramid have?",3,4
+"How many 2-dimensional faces does a 4-simplex have?",4,10
+"How many 2-dimensional faces does a square have?",2,1
+"How many 2-dimensional faces does a cube have?",3,6
+"How many 2-dimensional faces does a tesseract have?",4,24
 "What is the vertex count of a triangle?",2,3
 "What is the vertex count of a triangular pyramid?",3,4
 "What is the vertex count of a 4-simplex?",4,5
@@ -47,12 +47,12 @@ question,dimension,answer
 "What is the edge count of a square?",2,4
 "What is the edge count of a cube?",3,12
 "What is the edge count of a tesseract?",4,32
-"What is the face count of a triangle?",2,1
-"What is the face count of a triangular pyramid?",3,4
-"What is the face count of a 4-simplex?",4,10
-"What is the face count of a square?",2,1
-"What is the face count of a cube?",3,6
-"What is the face count of a tesseract?",4,24
+"What is the 2-dimensional face count of a triangle?",2,1
+"What is the 2-dimensional face count of a triangular pyramid?",3,4
+"What is the 2-dimensional face count of a 4-simplex?",4,10
+"What is the 2-dimensional face count of a square?",2,1
+"What is the 2-dimensional face count of a cube?",3,6
+"What is the 2-dimensional face count of a tesseract?",4,24
 "What is the perimeter of a square with side length 1?",2,4
 "What is the perimeter of a rectangle with length 2 and width 3?",2,10
 "What is the area of a right triangle with legs 3 and 4?",2,6

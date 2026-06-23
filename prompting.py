@@ -50,17 +50,6 @@ options = [
     "\nAnswer choices: A. Yes B. No C. Cannot be inferred",
 ]
 
-# Footnote describing how vertices of the higher-dimensional figures are labeled
-# and which vertices are adjacent. Injected into every question prompt so that
-# the polytope-labeling questions (rectangular solids, tesseracts, hyperplanes)
-# are unambiguous. Contains no "{...}" so it can be concatenated outside .format().
-labeling_convention = """
-Labeling conventions:
-- A prism/box written as "X1X2...Xn-Y1Y2...Yn" (e.g. rectangular solid ABEF-GHIJ) lists corresponding vertices in order: each Xi is joined to Yi by an edge, so Xi-Xj and Yi-Yj are corresponding (parallel) edges.
-- A tesseract / 4-polytope written as "(cell1)-(cell2)" (e.g. (ABEF-GHIJ)-(KLMN-OPQR)) is two corresponding cells; matching vertices of cell1 and cell2 are joined across the 4th direction.
-- A face, cell, or hyperplane is named by listing its vertices (e.g. plane GHI, 3D hyperplane GHIO, or an 8-vertex bounding cell such as 3D hyperplane ABCDMNOP).
-"""
-
 numeric_preludes = {
     "with_reasoning": """You are evaluating a numeric geometry question.
 You may think step-by-step and output your full reasoning.
@@ -181,7 +170,7 @@ def make_prompt_mc(
         choices = ", ".join([chr(ord("A") + i) for i in range(len(rotated_choices))])
     else:
         choices = derive_choices_text(opt)
-    return prelude_explanations[key].format(choices=choices) + labeling_convention + question + opt + postlude_explanations[key]
+    return prelude_explanations[key].format(choices=choices) + question + opt + postlude_explanations[key]
 
 
 def make_prompt_mc_variants(
@@ -220,10 +209,233 @@ def make_prompt_mc_variants(
 def make_prompt_numeric(question: str, reasoning: bool | str = True) -> str:
     """Build a numeric prompt."""
     key = resolve_prompt_key(reasoning)
-    prompt = numeric_preludes[key] + labeling_convention + "\n" + question
+    prompt = numeric_preludes[key] + "\n" + question
     if key == "simple_prompt":
         prompt += postlude_explanations[key]
     return prompt
+
+
+# -------------------------------------------------------------
+# Numeric multiple-choice: solve a numeric question by SELECTING from 4 options
+# (the correct value + 3 distractors), rotated like the regular MC questions.
+# This complements (does not replace) the free-form numeric format above.
+# -------------------------------------------------------------
+NUMERIC_MC_NUM_CHOICES = 4
+
+
+# Vertices / edges / 2-faces of each figure used in the count questions.
+_POLYTOPE_COUNTS: dict[str, tuple[int, int, int]] = {
+    "triangular pyramid": (4, 6, 4),
+    "triangle": (3, 3, 1),
+    "square": (4, 4, 1),
+    "cube": (8, 12, 6),
+    "4-simplex": (5, 10, 10),
+    "tesseract": (16, 32, 24),
+}
+_COUNT_POOL = sorted({v for tpl in _POLYTOPE_COUNTS.values() for v in tpl})
+
+
+def _distractor_numbers(question: str) -> list[int]:
+    """Integer parameters of a numeric question (strips π / dimension tokens)."""
+    s = question.lower().replace("2-dimensional", "")
+    s = s.replace("\\pi^2", "").replace("\\pi", "").replace("pi^2", "").replace("pi", "")
+    s = re.sub(r"\b\d+-(simplex|sphere|parallelotope|cell)\b", "", s)
+    s = re.sub(r"\b4d\b", "", s)
+    return [int(x) for x in re.findall(r"\d+", s)]
+
+
+def _magnitude_fallback(correct: int, n: int) -> list[int]:
+    """Magnitude-aware perturbations, used only to top up to `n` distractors."""
+    step = max(1, round(abs(correct) * 0.1))
+    cands = []
+    for d in (step, 2 * step, 1, 2, 3):
+        cands += [correct + d, correct - d]
+    cands += [2 * correct, correct // 2 if correct >= 2 else None]
+    out, seen = [], {correct}
+    for v in cands:
+        if v is None or v <= 0 or v in seen:
+            continue
+        seen.add(v)
+        out.append(v)
+        if len(out) == n:
+            break
+    return out
+
+
+def make_numeric_distractors(question: str, answer: str, n: int = 3) -> list[str]:
+    """Build `n` *error-mode* distractors for a numeric geometry question.
+
+    Distractors are the values a solver would get by a characteristic mistake
+    for that exact question family (dropped/confused coefficient, wrong exponent,
+    surface↔volume confusion, sum-instead-of-hypotenuse, V/E/F confusion, …),
+    ordered most-plausible-first. Falls back to magnitude-aware perturbations
+    only to guarantee `n` results. Returns [] if the answer is not an integer.
+    """
+    try:
+        C = int(str(answer).strip())
+    except (TypeError, ValueError):
+        return []
+
+    cands: list[int] = []
+
+    def add(*vals):
+        for v in vals:
+            if v is None:
+                continue
+            if isinstance(v, float):
+                if abs(v - round(v)) > 1e-9:
+                    continue
+                v = int(round(v))
+            if isinstance(v, int) and v > 0:
+                cands.append(v)
+
+    s = question.lower()
+    try:
+        m = _distractor_numbers(question)
+        if any(k in s for k in ("number of", "how many", "vertex count", "edge count", "face count")):
+            for fig, (V, E, F) in _POLYTOPE_COUNTS.items():
+                if fig in s:
+                    add(V, E, F)  # V/E/F confusion of the same figure
+                    break
+            for c in sorted(_COUNT_POOL, key=lambda c: abs(c - C)):
+                add(c)  # nearby geometrically-meaningful counts
+        # --- 4D (hyper-) families first (avoid 'volume of a' / 'area of a' shadowing) ---
+        elif "hyper-surface volume of a regular 4-simplex" in s:
+            cv = m[0]; add(4 * cv, 6 * cv, 10 * cv, 3 * cv)            # wrong #cells
+        elif "hyper-surface volume of a tesseract" in s:
+            sd = m[0]; add(sd ** 4, 24 * sd * sd, 6 * sd * sd, sd ** 3)  # hypervol / wrong count
+        elif "hyper-surface volume of a 3-sphere" in s:
+            r = m[0]; add((r ** 4) / 2, r ** 3, 4 * r ** 3, r ** 4)    # hypervol mult / wrong coeff
+        elif "hyper-surface volume of a rectangular 4-parallelotope" in s:
+            l, w, h, d = m[:4]
+            add(l * w * h + l * w * d + l * h * d + w * h * d, l * w * h * d, 2 * l * w * h)  # forgot x2 / hypervol
+        elif "hyper-volume of a tesseract" in s:
+            sd = m[0]; add(8 * sd ** 3, sd ** 3, 4 * sd ** 3, sd * sd)  # hypersurface / 3D vol
+        elif "hyper-volume of a rectangular 4-parallelotope" in s:
+            l, w, h, d = m[:4]
+            add(2 * (l * w * h + l * w * d + l * h * d + w * h * d), l * w * h, 2 * l * w * h * d)
+        elif "hyper-volume of a 3-sphere" in s:
+            r = m[0]; add(2 * r ** 3, r ** 4, 4 * r ** 3, r ** 3)       # hypersurface mult / wrong coeff
+        elif "4-simplex" in s and "hyper-volume" in s:                  # (1/4)·base·height
+            if "legs" in s:
+                base = (m[0] * m[1] / 2) * m[2] / 3; depth = m[3]
+            else:
+                base, depth = m[0], m[1]
+            add(base * depth, base * depth / 3, base * depth / 2, base * depth * 2)  # dropped/confused 1/4
+        # --- circle / diagonal ---
+        elif "circumference of a circle" in s or "perimeter of a circle" in s:
+            r = m[0]; add(r * r, 4 * r, r, 3 * r)                       # area mult / wrong factor
+        elif "hypotenuse" in s or "diagonal of a rectangle" in s:
+            a, b = m[0], m[1]; add(a + b, abs(a - b), a * a + b * b, max(a, b))  # sum / no sqrt
+        elif "space diagonal" in s or "diagonal of a rectangular 4-parallelotope" in s:
+            add(sum(m), sum(x * x for x in m), max(m))                  # sum / no sqrt
+        # --- perimeter ---
+        elif "perimeter of a equilateral triangle" in s:
+            sd = m[0]; add(sd * sd, 4 * sd, 2 * sd, 6 * sd)
+        elif "perimeter of a square" in s:
+            sd = m[0]; add(sd * sd, 2 * sd, 6 * sd, 3 * sd)             # area / wrong #sides
+        elif "perimeter of a rectangle" in s:
+            l, w = m[0], m[1]; add(l * w, l + w, 2 * l * w, 4 * max(l, w))  # area / half
+        # --- surface area ---
+        elif "surface area of a regular triangular pyramid" in s:
+            fa = m[0]; add(3 * fa, 6 * fa, 2 * fa, fa)                  # wrong #faces
+        elif "surface area of a cube" in s:
+            sd = m[0]; add(sd ** 3, sd * sd, 4 * sd * sd, 12 * sd * sd)  # volume / one face / wrong coeff
+        elif "surface area of a sphere" in s:
+            r = m[0]; add(r * r, 2 * r * r, 3 * r * r, 8 * r * r)        # wrong coeff
+        elif "surface area of a rectangular prism" in s:
+            l, w, h = m[0], m[1], m[2]
+            add(l * w + l * h + w * h, l * w * h, 2 * (l + w + h), l * w)  # forgot x2 / volume
+        # --- area ---
+        elif "area of a" in s and "triangle" in s:
+            b, h = m[0], m[1]; add(b * h, b + h, (b + h) / 2, 2 * b * h)  # forgot 1/2 / sum
+        elif "area of a square" in s:
+            sd = m[0]; add(4 * sd, sd ** 3, 2 * sd * sd, 2 * sd)        # perimeter / volume
+        elif "area of a rectangle" in s:
+            l, w = m[0], m[1]; add(2 * (l + w), l + w, 2 * l * w, l * l)  # perimeter
+        elif "area of a circle" in s:
+            r = m[0]; add(2 * r, 4 * r * r, r, 3 * r * r)               # circumference mult / wrong coeff
+        # --- volume ---
+        elif "volume of a cube" in s:
+            sd = m[0]; add(6 * sd * sd, sd * sd, 3 * sd ** 3, 2 * sd ** 3)  # surface / one face
+        elif "volume of a rectangular prism" in s:
+            l, w, h = m[0], m[1], m[2]
+            add(2 * (l * w + l * h + w * h), l * w, l + w + h, 2 * l * w * h)  # surface
+        elif "volume of a sphere" in s:
+            r = m[0]; add(4 * r * r, 4 * r ** 3, (r ** 3) / 3, 2 * r ** 3)  # surface mult / wrong coeff
+        elif "pyramid" in s and "volume of a" in s:                    # (1/3)·base·height
+            if "legs" in s:
+                base = m[0] * m[1] / 2; h = m[2]
+            else:
+                base, h = m[0], m[1]
+            add(base * h, base * h / 2, base * h / 4, base * h * 2 / 3)  # dropped/confused 1/3
+    except Exception:
+        pass
+
+    out: list[int] = []
+    seen = {C}
+    for v in cands:
+        if v in seen:
+            continue
+        seen.add(v)
+        out.append(v)
+        if len(out) == n:
+            break
+    if len(out) < n:
+        for v in _magnitude_fallback(C, n):
+            if v not in seen:
+                seen.add(v)
+                out.append(v)
+                if len(out) == n:
+                    break
+    return [str(v) for v in out[:n]]
+
+
+def make_prompt_numeric_mc(
+    question: str,
+    base_choices: list[str],
+    reasoning: bool | str = True,
+    rotation: int = 0,
+) -> str:
+    """Build a multiple-choice prompt for a numeric question.
+
+    `base_choices` is the canonical order (correct value at index 0). The list
+    is left-rotated by `rotation` for presentation, mirroring make_prompt_mc, so
+    remap_answer_for_rotation("A", rotation, len) gives the correct letter.
+    """
+    key = resolve_prompt_key(reasoning)
+    rotated = _rotate_list(list(base_choices), rotation)
+    opt = _format_options(rotated)
+    choices = ", ".join(chr(ord("A") + i) for i in range(len(rotated)))
+    return prelude_explanations[key].format(choices=choices) + question + opt + postlude_explanations[key]
+
+
+def make_prompt_numeric_mc_variants(
+    question: str,
+    answer: str,
+    reasoning: bool | str = True,
+) -> list[dict[str, int | str]]:
+    """Build all cyclic-rotation variants of a numeric multiple-choice prompt.
+
+    The correct value sits at canonical index 0 (letter "A"); evaluate.py remaps
+    it per rotation with remap_answer_for_rotation. Returns [] when distractors
+    cannot be built (non-integer answer) so the caller can skip that question.
+    """
+    distractors = make_numeric_distractors(question, answer, n=NUMERIC_MC_NUM_CHOICES - 1)
+    if len(distractors) < NUMERIC_MC_NUM_CHOICES - 1:
+        return []
+    base_choices = [str(answer).strip()] + distractors  # correct at index 0
+    nch = len(base_choices)
+    variants: list[dict[str, int | str]] = []
+    for rotation in range(nch):
+        variants.append(
+            {
+                "prompt": make_prompt_numeric_mc(question, base_choices, reasoning, rotation),
+                "rotation": rotation,
+                "num_choices": nch,
+            }
+        )
+    return variants
 
 
 # -------------------------------------------------------------
@@ -240,7 +452,39 @@ _CHAT_TEMPLATE_MODELS: tuple[str, ...] = (
     "mistral",
     "phi",
     "falcon",
+    "gpt-oss",
+    "gpt_oss",
 )
+
+# Optional reasoning-effort hint passed to chat templates that support it
+# (e.g. gpt-oss harmony format: reasoning_effort="low"|"medium"|"high").
+# Set via set_reasoning_effort() from the CLI; None means "do not pass".
+_REASONING_EFFORT: Optional[str] = None
+
+
+def set_reasoning_effort(effort: Optional[str]) -> None:
+    """Set the global reasoning-effort hint for chat-template rendering."""
+    global _REASONING_EFFORT
+    _REASONING_EFFORT = effort or None
+
+
+def _is_harmony_model(model_name: str) -> bool:
+    """gpt-oss uses the harmony format; manual assistant prefill corrupts it."""
+    lower = (model_name or "").lower()
+    return "gpt-oss" in lower or "gpt_oss" in lower
+
+
+def _template_kwargs_variants() -> list[dict]:
+    """Candidate apply_chat_template kwargs, most-preferred first.
+
+    When a reasoning effort is configured, try variants that pass it so
+    templates supporting it (gpt-oss) honor it; always fall back to plain.
+    """
+    base = [{"enable_thinking": False}, {}]
+    if _REASONING_EFFORT:
+        re_kw = {"reasoning_effort": _REASONING_EFFORT}
+        return [re_kw, {**base[0], **re_kw}] + base
+    return base
 
 _tokenizer_cache: Dict[str, object] = {}
 
@@ -320,9 +564,14 @@ def apply_chat_template(prompt: str, model_name: str) -> str:
             sys_msg = None
             user_msg = user_content
 
+        # gpt-oss harmony format already opens the assistant turn via
+        # add_generation_prompt; appending a raw "The answer is" prefill would
+        # corrupt the channel structure, so suppress it for harmony models.
+        effective_prefill = "" if _is_harmony_model(model_name) else prefill
+
         # Try with explicit system role.
         if sys_msg:
-            for kwargs in [{"enable_thinking": False}, {}]:
+            for kwargs in _template_kwargs_variants():
                 try:
                     base = tok.apply_chat_template(
                         [
@@ -335,14 +584,14 @@ def apply_chat_template(prompt: str, model_name: str) -> str:
                     )
                     # Strip any <think>...</think> or dangling <think> from the assistant prefix
                     base = base.replace("<think>\n", "").replace("<think>", "")
-                    return base + prefill
+                    return base + effective_prefill
                 except Exception:
                     pass
 
         # Fallback: prepend system to user for models that don't support
         # the system role (e.g. Gemma raises an exception for it).
         combined = (sys_msg + "\n\n" + user_msg) if sys_msg else user_msg
-        for kwargs in [{"enable_thinking": False}, {}]:
+        for kwargs in _template_kwargs_variants():
             try:
                 base = tok.apply_chat_template(
                     [{"role": "user", "content": combined}],
@@ -351,7 +600,7 @@ def apply_chat_template(prompt: str, model_name: str) -> str:
                     **kwargs,
                 )
                 base = base.replace("<think>\n", "").replace("<think>", "")
-                return base + prefill
+                return base + effective_prefill
             except Exception as e:
                 print(
                     f"Warning: apply_chat_template failed for {model_name}: {e}",

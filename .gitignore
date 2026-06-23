@@ -8,3 +8,4 @@ output
 sae_activations
 tmp
 .venv
+scripts/local/
