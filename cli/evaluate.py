@@ -1,6 +1,7 @@
 import csv
 import os
 import re
+import math
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 
@@ -47,6 +48,36 @@ def _build_azure_client() -> AzureOpenAI:
     return AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
 
 
+def _vllm_token_logprobs(req_out) -> Optional[List[Tuple[str, float]]]:
+    """Per-generated-token (decoded_token, logprob) for a vLLM RequestOutput.
+
+    Returns the logprob of each *sampled* token (not the top-k alternatives),
+    so downstream code can read the probability the model assigned to whichever
+    token it emitted as its answer. None if logprobs are unavailable.
+    """
+    try:
+        out = req_out.outputs[0]
+        lps = out.logprobs
+        tids = out.token_ids
+        if not lps or tids is None:
+            return None
+        pairs: List[Tuple[str, float]] = []
+        for pos, tid in enumerate(tids):
+            entry = lps[pos].get(tid) if pos < len(lps) else None
+            if entry is None:
+                continue
+            tok = getattr(entry, "decoded_token", None)
+            pairs.append((tok if tok is not None else "", float(entry.logprob)))
+        return pairs or None
+    except Exception:
+        return None
+
+
+# Number of top logprobs requested from vLLM (we only need the sampled token's
+# logprob; a small top-k is kept cheap and enables richer offline analysis).
+_LOGPROBS_TOPK = 20
+
+
 @torch.no_grad()
 def chat(
     prompts: List[str],
@@ -61,8 +92,12 @@ def chat(
     temperature: float = 0.1,
     repetition_penalty: float = 1.1,
     desc: str = "",
-) -> List[str]:
+) -> Tuple[List[str], List[Optional[List[Tuple[str, float]]]]]:
+    """Returns (responses, token_logprobs). token_logprobs[i] is the per-token
+    (decoded_token, logprob) list for response i under the vLLM path, or None
+    (HF / Azure paths, or on failure)."""
     responses: List[str] = []
+    token_lps: List[Optional[List[Tuple[str, float]]]] = []
 
     def _strip_prompt_echo(prompt: str, text: str) -> str:
         if prompt and text.startswith(prompt):
@@ -91,10 +126,11 @@ def chat(
                     except Exception:
                         content = ""
             responses.append(content)
-        return responses
+            token_lps.append(None)  # logprobs not available via Azure chat API
+        return responses, token_lps
 
     if len(prompts) == 0:
-        return responses
+        return responses, token_lps
 
     # Determine device for HF models; vLLM handles its own device management.
     try:
@@ -111,6 +147,7 @@ def chat(
 
     for i in tqdm(range(batch_num), desc=desc or "batches", unit="batch", leave=False):
         batch_prompts = prompts[i * batch_size: (i + 1) * batch_size]
+        batch_lps: List[Optional[List[Tuple[str, float]]]] = [None] * len(batch_prompts)
 
         if isinstance(model, LLM):
             try:
@@ -121,6 +158,7 @@ def chat(
                     repetition_penalty=repetition_penalty,
                     max_tokens=max_new_tokens,
                     min_tokens=1,
+                    logprobs=_LOGPROBS_TOPK,
                 )
                 outputs = model.generate(batch_prompts, sampling_params=sampling_params, use_tqdm=False)
             except RuntimeError as e:
@@ -138,6 +176,7 @@ def chat(
                             repetition_penalty=repetition_penalty,
                             max_tokens=max(32, max_new_tokens // 4),
                             min_tokens=1,  # Fix: was missing in OOM fallback
+                            logprobs=_LOGPROBS_TOPK,
                         )
                         outputs = model.generate(batch_prompts, sampling_params=sampling_params, use_tqdm=False)
                     except Exception:
@@ -150,6 +189,7 @@ def chat(
                 allow_retry = False
             else:
                 batch_responses = []
+                lps_list: List[Optional[List[Tuple[str, float]]]] = []
                 for req_out in outputs:
                     try:
                         text = "".join([c.text for c in req_out.outputs])
@@ -158,6 +198,8 @@ def chat(
                     # vLLM returns only the generated text (not the prompt),
                     # so _strip_prompt_echo is not needed here.
                     batch_responses.append(text.strip())
+                    lps_list.append(_vllm_token_logprobs(req_out))
+                batch_lps = lps_list
                 allow_retry = True
         else:
             # Strip <think> from assistant prefix so decoder-only models
@@ -220,6 +262,7 @@ def chat(
                         repetition_penalty=repetition_penalty,
                         max_tokens=max(8, min(64, max_new_tokens)),
                         min_tokens=1,
+                        logprobs=_LOGPROBS_TOPK,
                     )
                     try:
                         retry_outputs = model.generate(retry_prompts_raw, sampling_params=retry_params, use_tqdm=False)
@@ -234,6 +277,7 @@ def chat(
                             cleaned = text.strip()
                             if cleaned:
                                 batch_responses[empty_idxs[rel_idx]] = cleaned
+                                batch_lps[empty_idxs[rel_idx]] = _vllm_token_logprobs(req_out)
                 else:
                     retry_inputs = tokenizer(retry_prompts_raw, return_tensors="pt", padding=True, truncation=True)
                     retry_inputs = {k: v.to(device) for k, v in retry_inputs.items()}
@@ -257,7 +301,8 @@ def chat(
                             if cleaned:
                                 batch_responses[empty_idxs[rel_idx]] = cleaned
         responses.extend(batch_responses)
-    return responses
+        token_lps.extend(batch_lps)
+    return responses, token_lps
 
 
 # -------------------------------------------------------------
@@ -390,6 +435,37 @@ def _normalize_label(s: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "", (s or "")).upper()
 
 
+def _answer_confidence(
+    token_lps: Optional[List[Tuple[str, float]]],
+    predicted: Optional[str],
+    is_numeric: bool,
+) -> Optional[float]:
+    """Probability the model assigned to the answer token it emitted.
+
+    - multiple choice (letter): the first generated token whose first alpha char
+      is the predicted letter → exp(logprob).
+    - numeric (free-form): the first generated token that starts the predicted
+      number (first token containing a digit) → exp(logprob). This is the
+      first-token probability, not the joint probability of the whole number.
+    Returns None when logprobs or a matching token are unavailable.
+    """
+    if not token_lps or not predicted:
+        return None
+    if is_numeric:
+        for tok, lp in token_lps:
+            if any(ch.isdigit() for ch in (tok or "")):
+                return math.exp(lp)
+        return None
+    letter = predicted.strip().upper()[:1]
+    if not letter.isalpha():
+        return None
+    for tok, lp in token_lps:
+        alphas = [c for c in (tok or "").upper() if c.isalpha()]
+        if alphas and alphas[0] == letter:
+            return math.exp(lp)
+    return None
+
+
 # Global timestamp for all runs in this session (can be overridden by CLI)
 _RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 # Base results directory (can be overridden by CLI)
@@ -513,6 +589,9 @@ def evaluate(
 
     total = 0
     total_correct = 0
+    total_empty = 0
+    overall_conf_sum = 0.0
+    overall_conf_n = 0
     per_type_stats: List[Tuple[str, int, int, float]] = []
     per_question_records: List[Dict[str, str]] = []
 
@@ -550,7 +629,7 @@ def evaluate(
                 confusion_matrix = None
 
             formatted_prompts = [_apply_chat_template(p, model_name) for p in prompts]
-            responses = chat(
+            responses, response_logprobs = chat(
                 formatted_prompts,
                 model_name=model_name,
                 model=model,
@@ -566,12 +645,19 @@ def evaluate(
             )
 
             correct = 0
+            empty_n = 0             # predictions with no parseable answer
+            conf_sum = 0.0          # mean confidence over questions with a logprob
+            conf_n = 0
+            conf_correct_sum = 0.0
+            conf_correct_n = 0
+            conf_incorrect_sum = 0.0
+            conf_incorrect_n = 0
             rows = per_type_data[type_key]["rows"]
             rotations = per_type_data[type_key]["rotations"]
             nchoices_list = per_type_data[type_key]["num_choices"]
             canon_answers = per_type_data[type_key]["canon_answers"]
-            for prompt, formatted_prompt, response, true_raw, row, rot, nch_row, canon_ans in zip(
-                prompts, formatted_prompts, responses, answers, rows, rotations, nchoices_list, canon_answers
+            for prompt, formatted_prompt, response, token_lps, true_raw, row, rot, nch_row, canon_ans in zip(
+                prompts, formatted_prompts, responses, response_logprobs, answers, rows, rotations, nchoices_list, canon_answers
             ):
                 log_file.write(f"Type: {type_key}\n")
                 log_file.write(f"Question: {prompt}\n")
@@ -582,11 +668,15 @@ def evaluate(
                 predicted_raw = ""
                 predicted_normalized = ""
                 is_correct = False
+                is_empty = False
+                confidence: Optional[float] = None
 
                 if type_key == "numeric":
                     predicted_num = extract_numeric(response)
                     predicted_raw = predicted_num or ""
                     predicted_normalized = predicted_num or ""
+                    is_empty = predicted_num is None
+                    confidence = _answer_confidence(token_lps, predicted_num, is_numeric=True)
                     log_file.write(f"Predicted (raw numeric): {predicted_num}\n")
                     log_file.write(f"Correct (raw numeric): {true_raw}\n\n")
                     if predicted_num is not None:
@@ -599,6 +689,8 @@ def evaluate(
                 else:
                     predicted = extract_answer(response)
                     predicted_raw = predicted or ""
+                    is_empty = predicted is None
+                    confidence = _answer_confidence(token_lps, predicted, is_numeric=False)
                     log_file.write(f"Predicted (raw): {predicted}\n")
                     log_file.write(f"Correct (raw): {true_raw}\n\n")
                     if predicted is not None:
@@ -644,6 +736,18 @@ def evaluate(
                     question_text = (row.get(f"{dim}D") or "").strip()
                     source_file = csv_path
 
+                if is_empty:
+                    empty_n += 1
+                if confidence is not None:
+                    conf_sum += confidence
+                    conf_n += 1
+                    if is_correct:
+                        conf_correct_sum += confidence
+                        conf_correct_n += 1
+                    else:
+                        conf_incorrect_sum += confidence
+                        conf_incorrect_n += 1
+
                 per_question_records.append(
                     {
                         "dimension": str(dim),
@@ -655,15 +759,33 @@ def evaluate(
                         "predicted_raw": predicted_raw,
                         "predicted_normalized": predicted_normalized,
                         "is_correct": "1" if is_correct else "0",
+                        "confidence": f"{confidence:.6f}" if confidence is not None else "",
                         "input": formatted_prompt,
                         "response": response,
                     }
                 )
 
             accuracy = correct / n if n > 0 else 0
+            conf_mean = conf_sum / conf_n if conf_n > 0 else None
+            conf_correct_mean = conf_correct_sum / conf_correct_n if conf_correct_n > 0 else None
+            conf_incorrect_mean = conf_incorrect_sum / conf_incorrect_n if conf_incorrect_n > 0 else None
             total += n
             total_correct += correct
-            per_type_stats.append((type_key, correct, n, accuracy))
+            total_empty += empty_n
+            overall_conf_sum += conf_sum
+            overall_conf_n += conf_n
+            per_type_stats.append(
+                {
+                    "type": type_key,
+                    "n": n,
+                    "correct": correct,
+                    "acc": accuracy,
+                    "empty": empty_n / n if n > 0 else 0.0,
+                    "conf": conf_mean,
+                    "conf_ok": conf_correct_mean,
+                    "conf_no": conf_incorrect_mean,
+                }
+            )
 
             if confusion_matrix is not None:
                 plt.figure(figsize=(8, 6))
@@ -697,6 +819,7 @@ def evaluate(
         "predicted_raw",
         "predicted_normalized",
         "is_correct",
+        "confidence",
         "input",
         "response",
     ]
@@ -716,18 +839,41 @@ def evaluate(
         writer.writeheader()
         writer.writerows([r for r in per_question_records if r["is_correct"] == "0"])
 
+    type_label = {"1": "PPC (1)", "2": "IC (2)", "3": "CC (3)"}
+    overall_conf = overall_conf_sum / overall_conf_n if overall_conf_n > 0 else None
+    overall_empty = total_empty / total if total > 0 else 0.0
+    SEP, SUB = "=" * 72, "-" * 72
+
+    def _cf(v):
+        return f"{v:.3f}" if v is not None else "    -"
+
     with open(result_path, "a", encoding="utf-8") as result_file:
-        result_file.write("\n")
-        result_file.write("========================================\n")
-        result_file.write(f"Model: {model_name} \nDimension: {dim}D\n")
-        result_file.write("----------------------------------------\n")
-        result_file.write(f"{'Type':<12}{'Correct':>8}{'Total':>8}{'Accuracy':>12}\n")
-        result_file.write("----------------------------------------\n")
-        for tkey, c, n, acc in per_type_stats:
-            result_file.write(f"{tkey:<12}{c:8d}{n:8d}{acc:12.2%}\n")
-        result_file.write("----------------------------------------\n")
-        result_file.write(f"{'Overall':<12}{total_correct:8d}{total:8d}{overall_accuracy:12.2%}\n")
-        result_file.write("========================================\n")
+        result_file.write("\n" + SEP + "\n")
+        result_file.write(f" {model_name}   ·   {dim}D\n")
+        result_file.write(SUB + "\n")
+        result_file.write(
+            f" {'Type':<11}{'N':>6}{'Correct':>9}{'Acc':>9}{'Empty':>8}"
+            f"{'Conf':>8}{'Conf✓':>8}{'Conf✗':>8}\n"
+        )
+        result_file.write(SUB + "\n")
+        for s in per_type_stats:
+            result_file.write(
+                f" {type_label.get(s['type'], s['type']):<11}{s['n']:>6}{s['correct']:>9}"
+                f"{s['acc']:>9.2%}{s['empty']:>8.1%}"
+                f"{_cf(s['conf']):>8}{_cf(s['conf_ok']):>8}{_cf(s['conf_no']):>8}\n"
+            )
+        result_file.write(SUB + "\n")
+        result_file.write(
+            f" {'Overall':<11}{total:>6}{total_correct:>9}{overall_accuracy:>9.2%}"
+            f"{overall_empty:>8.1%}{_cf(overall_conf):>8}\n"
+        )
+        result_file.write(SUB + "\n")
+        result_file.write(
+            " Acc = accuracy   Empty = share with no parseable answer\n"
+            " Conf = mean P(model's chosen answer token); Conf✓/Conf✗ = on correct/incorrect\n"
+            " (vLLM logprobs at the run's sampling temperature; blank = unavailable)\n"
+        )
+        result_file.write(SEP + "\n")
 
     return overall_accuracy
 
