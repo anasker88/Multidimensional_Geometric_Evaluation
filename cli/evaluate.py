@@ -86,11 +86,11 @@ def chat(
     tokenizer=None,
     batch_size: int = 8,
     max_new_tokens: int = 256,
-    do_sample: bool = True,
+    do_sample: bool = False,
     top_k: int = 0,
     top_p: float = 0.9,
     temperature: float = 0.1,
-    repetition_penalty: float = 1.1,
+    repetition_penalty: float = 1.0,
     desc: str = "",
 ) -> Tuple[List[str], List[Optional[List[Tuple[str, float]]]]]:
     """Returns (responses, token_logprobs). token_logprobs[i] is the per-token
@@ -142,6 +142,15 @@ def chat(
     # vLLM: top_k=0 means "sample from 0 tokens" and causes empty output.
     # Use -1 to disable top-k filtering instead.
     vllm_top_k = top_k if top_k > 0 else -1
+
+    # Greedy decoding: vLLM (unlike HF) ignores do_sample and selects greedily
+    # only when temperature < ~1e-5, so force temperature=0 and neutralize
+    # top_p/top_k. raw_logprobs (logprobs_mode default) are computed from the
+    # pre-temperature logits, so per-token confidence is unaffected by this.
+    if not do_sample:
+        temperature = 0.0
+        top_p = 1.0
+        vllm_top_k = -1
 
     batch_num = (len(prompts) + batch_size - 1) // batch_size
 
@@ -486,11 +495,11 @@ def evaluate(
     tokenizer=None,
     batch_size: int = 8,
     max_new_tokens: int = 256,
-    do_sample: bool = True,
+    do_sample: bool = False,
     top_k: int = 0,
     top_p: float = 0.9,
     temperature: float = 0.1,
-    repetition_penalty: float = 1.1,
+    repetition_penalty: float = 1.0,
     reasoning: bool = True,
     prompt_type: Optional[str] = None,
     questions_csv_path: str = "data/questions_augmented.csv",
@@ -887,11 +896,11 @@ if __name__ == "__main__":
     parser.add_argument("--dims", type=str, default="2", help="Comma-separated dimensions to evaluate (default: 2)")
     parser.add_argument("--batch-size", type=int, default=8, help="Batch size for local generation")
     parser.add_argument("--max-new-tokens", type=int, default=2048, help="Max new tokens to generate per prompt")
-    parser.add_argument("--greedy", action="store_true", help="Use greedy decoding (do_sample=False)")
+    parser.add_argument("--greedy", action=argparse.BooleanOptionalAction, default=True, help="Greedy decoding (default). Use --no-greedy to sample at --temperature.")
     parser.add_argument("--temperature", type=float, default=0.1, help="Sampling temperature")
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p for sampling")
     parser.add_argument("--top-k", type=int, default=0, help="Top-k for sampling (0 means disabled)")
-    parser.add_argument("--repetition-penalty", type=float, default=1.1, help="Repetition penalty")
+    parser.add_argument("--repetition-penalty", type=float, default=1.0, help="Repetition penalty (default 1.0; 1.1 caused MC primacy aversion / A-slot underestimate — see summary)")
     parser.add_argument("--dtype", type=str, default="bfloat16", help="Preferred dtype for vLLM local models: float16|bfloat16|float32")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.7, help="GPU memory utilization fraction for vLLM")
     parser.add_argument("--tensor-parallel-size", type=int, default=1, help="Number of GPUs for tensor parallelism in vLLM")
