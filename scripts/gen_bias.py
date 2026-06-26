@@ -11,7 +11,7 @@ import csv, os, glob
 csv.field_size_limit(10**7)
 
 ROOT = "/home/tota_abe/Multidimensional_Geometric_Evaluation"
-BASE = "results/final_20260625"
+BASE = os.environ.get("EVAL_BASE", "results/final_greedy_20260626")
 SUMMARY = os.path.join(ROOT, BASE, "summary.md")
 
 MODELS = [

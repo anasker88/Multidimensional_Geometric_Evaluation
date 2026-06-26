@@ -5,7 +5,7 @@ from collections import defaultdict, Counter
 csv.field_size_limit(10**9)
 
 ROOT = "/home/tota_abe/Multidimensional_Geometric_Evaluation"
-BASE = "results/final_20260625"
+BASE = os.environ.get("EVAL_BASE", "results/final_greedy_20260626")
 OUT = os.path.join(ROOT, BASE, "summary.md")
 
 # (display, dir = results/<BASE>/<model_safe>, prompt, TP, maxtok)
@@ -71,7 +71,7 @@ def _f(v, p=1): return f"{v:.{p}f}" if v is not None else "—"
 data = {name: load(d) for name, d, _, _, _ in MODELS}
 
 # 考察は手書き。下のマーカー間を編集すれば、本スクリプト再生成でも保持される。
-FINDINGS_PLACEHOLDER = "_(考察未記入。`<!-- FINDINGS:START -->` 〜 `<!-- FINDINGS:END -->` 間に手書きで追記してください。)_"
+FINDINGS_PLACEHOLDER = "_(考察未記入。FINDINGS の START/END コメント間に手書きで追記してください。)_"
 def extract_findings(path):
     if os.path.exists(path):
         m = re.search(r"<!-- FINDINGS:START -->(.*?)<!-- FINDINGS:END -->", open(path, encoding="utf-8").read(), re.S)
@@ -82,7 +82,7 @@ findings = extract_findings(OUT)
 
 L = []
 L.append("# Multidimensional Geometric Evaluation — Summary\n")
-L.append("**Generated**: 2026-06-25  |  **vLLM**: 0.23.0  |  **GPU**: 4× NVIDIA A100 80GB PCIe\n")
+L.append("**Generated**: 2026-06-26  |  **decoding**: greedy + repetition_penalty=1.0  |  **vLLM**: 0.23.0  |  **GPU**: 4× NVIDIA A100 80GB PCIe\n")
 L.append("評価データ: `data/questions_augmented.csv` + `data/numeric_augmented.csv`（**numeric / numeric_mc を含む**）。次元 2D/3D/4D。\n")
 
 L.append("\n## 考察 / Findings\n")
@@ -95,7 +95,7 @@ L.append("| 指標 | 定義 |")
 L.append("|---|---|")
 L.append("| **Acc%**（正答率） | 正解数 ÷ 出題数。各 rotation 変種も 1 問として計上。 |")
 L.append("| **Empty%**（空率） | 解析可能な解答を抽出できなかった割合（`extract_answer`/`extract_numeric` が None）。思考漏れ・冗長出力で増える。 |")
-L.append("| **Conf**（信頼度） | モデルが出力した「自分の答えトークン」に割り当てた確率 = exp(logprob)。MC はレター、numeric は数値先頭トークン。vLLM logprobs（実行時サンプリング温度 0.1 下）。HF/Azure 経路は非対応（空欄）。 |")
+L.append("| **Conf**（信頼度） | モデルが出力した「自分の答えトークン」に割り当てた確率 = exp(logprob)。MC はレター、numeric は数値先頭トークン。vLLM `logprobs_mode=\"raw_logprobs\"`（既定）= 元 logits の log-softmax で、temperature・repetition_penalty 適用前の生確率。選択トークンには decoding/penalty が影響しうるが conf 値自体は不変。HF/Azure 経路は非対応（空欄）。 |")
 L.append("| **Conf✓ / Conf✗** | 正答時 / 誤答時の平均 Conf。Conf✓>Conf✗ なら「自信と正誤」が整合（弁別的）。差が小さい=過信。 |")
 L.append("| **提示スロット別 acc/conf** | 正解がレター位置 L に提示された変種での Acc% と平均 Conf。位置バイアス測定用。 |")
 L.append("| **出力レター別 conf(n)** | モデルが実際に出力したレター別の平均 Conf と選択数 n。出力位置に内在する信頼度・選好の偏り。 |")
