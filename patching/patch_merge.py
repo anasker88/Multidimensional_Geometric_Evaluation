@@ -1,7 +1,7 @@
 """Merge per-shard JSON outputs from patch_run.py --num-shards N.
 
 Usage:
-    .venv-patch/bin/python validation/patch_merge.py \
+    .venv/bin/python patching/patch_merge.py \
         --num-shards 4 \
         --in-dir output/patch_run/qwen35_9b
 """

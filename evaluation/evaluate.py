@@ -16,10 +16,9 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from prompting import (
+from common.prompting import (
     apply_chat_template as _apply_chat_template,
     set_reasoning_effort as _set_reasoning_effort,
-    make_prompt_mc,
     make_prompt_mc_variants,
     make_prompt_numeric,
     make_prompt_numeric_mc_variants,

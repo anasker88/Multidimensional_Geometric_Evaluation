@@ -21,8 +21,8 @@ from tqdm.auto import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from validation.ablation_eval import run_ablation_eval_with_report
-from validation.activation_io import _load_sae_and_model
+from sae.ablation_eval import run_ablation_eval_with_report
+from sae.activation_io import _load_sae_and_model
 
 _TQDM_BAR_FORMAT = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
 

@@ -21,7 +21,7 @@ NUM_GPUS="${3:-4}"
 if [ ! -f "$PAIRS" ]; then
   echo "ERROR: pairs file not found: $PAIRS"
   echo "Run patch_pairs.py first:"
-  echo "  .venv-patch/bin/python validation/patch_pairs.py --balance 40 --balance-types 1,2,3 --aligned-only --out $PAIRS"
+  echo "  .venv/bin/python patching/patch_pairs.py --balance 40 --balance-types 1,2,3 --aligned-only --out $PAIRS"
   exit 1
 fi
 
@@ -36,7 +36,7 @@ PIDS=()
 for i in $(seq 0 $((NUM_GPUS - 1))); do
   LOG="$OUT/shard${i}.log"
   echo "Starting shard $i on GPU $i -> log: $LOG"
-  CUDA_VISIBLE_DEVICES=$i .venv-patch/bin/python validation/patch_run.py \
+  CUDA_VISIBLE_DEVICES=$i .venv/bin/python patching/patch_run.py \
     --pairs "$PAIRS" \
     --out "$OUT" \
     --shard-id "$i" \
@@ -65,7 +65,7 @@ fi
 
 echo ""
 echo "=== Merging $NUM_GPUS shards ==="
-.venv-patch/bin/python validation/patch_merge.py \
+.venv/bin/python patching/patch_merge.py \
   --num-shards "$NUM_GPUS" \
   --in-dir "$OUT"
 

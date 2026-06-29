@@ -18,7 +18,7 @@
 # Detached, SSH-disconnect-safe launch:
 #   RUN_TS=final_$(date -u +%Y%m%d) setsid nohup bash scripts/run_all.sh >/dev/null 2>&1 &
 
-cd /home/tota_abe/Multidimensional_Geometric_Evaluation || exit 1
+cd "$(dirname "$(readlink -f "$0")")/.." || exit 1
 source .venv/bin/activate
 HF_TOKEN=$(cat ~/.cache/huggingface/token)
 export HF_TOKEN HUGGING_FACE_HUB_TOKEN="$HF_TOKEN"

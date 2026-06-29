@@ -14,16 +14,16 @@ from tqdm.auto import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from prompting import make_prompt_mc, make_prompt_mc_variants, make_prompt_numeric
-from validation.ablation_eval import run_ablation_eval_with_report
-from validation.activation_io import ensure_feature_activations
-from validation.probe import run_probe_and_report, run_random_probe_baseline_and_report
-from validation.singular import (
+from common.prompting import make_prompt_mc_variants, make_prompt_numeric
+from sae.ablation_eval import run_ablation_eval_with_report
+from sae.activation_io import ensure_feature_activations
+from sae.probe import run_probe_and_report, run_random_probe_baseline_and_report
+from sae.singular import (
 	compute_reason_scores,
 	find_singular_activations,
 	find_singular_activations_reason_score,
 )
-from validation.visualize import (
+from sae.visualize import (
 	TokenActivationVisualizer,
 	build_prompt_list,
 	collect_topk_prompt_data_from_scores,

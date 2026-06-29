@@ -11,8 +11,7 @@ import torch
 
 sys.path.insert(0, os.getcwd())
 
-from prompting import make_prompt_mc
-from cli.evaluate import chat
+from common.prompting import make_prompt_mc
 
 def load_sample_questions(csv_path, num_samples=8):
     """Load sample questions from CSV."""

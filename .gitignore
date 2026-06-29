@@ -9,7 +9,6 @@ sae_activations
 tmp
 .venv
 scripts/local/
-.venv-patch
 data/*.csv
 .git-results/
 analysis/

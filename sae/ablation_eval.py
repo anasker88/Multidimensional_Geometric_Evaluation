@@ -8,9 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tqdm.auto import tqdm
 
-from prompting import (
+from common.prompting import (
     apply_chat_template,
-    make_prompt_mc,
     make_prompt_mc_variants,
     make_prompt_numeric,
     remap_answer_for_rotation,

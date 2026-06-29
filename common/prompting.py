@@ -439,7 +439,7 @@ def make_prompt_numeric_mc_variants(
 
 
 # -------------------------------------------------------------
-# Chat template helpers (shared between cli/evaluate.py and ablation_eval.py)
+# Chat template helpers (shared between evaluation/evaluate.py and sae/ablation_eval.py)
 # -------------------------------------------------------------
 
 # Models that require a chat template applied before generation.

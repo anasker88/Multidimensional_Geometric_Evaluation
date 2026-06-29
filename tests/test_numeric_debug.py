@@ -11,7 +11,7 @@ import torch
 
 sys.path.insert(0, os.getcwd())
 
-from prompting import make_prompt_numeric
+from common.prompting import make_prompt_numeric
 
 def load_numeric_questions(csv_path, num_samples=4, filter_phrase=None):
     """Load numeric questions from CSV. Optionally filter by phrase."""

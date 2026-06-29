@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """現在の環境(numeric_mc + confidence/empty 反映)で評価した全モデルの summary.md を生成する。"""
-import csv, os, glob, math, re
+import csv, os, glob, re
 from collections import defaultdict, Counter
 csv.field_size_limit(10**9)
 
-ROOT = "/home/tota_abe/Multidimensional_Geometric_Evaluation"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = os.environ.get("EVAL_BASE", "results/final_greedy_20260626")
 OUT = os.path.join(ROOT, BASE, "summary.md")
 

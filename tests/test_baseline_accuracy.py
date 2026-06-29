@@ -11,7 +11,7 @@ import torch
 
 sys.path.insert(0, os.getcwd())
 
-from prompting import make_prompt_mc
+from common.prompting import make_prompt_mc
 
 def load_questions_csv(csv_path, max_samples=None):
     """Load all questions from CSV."""

@@ -1,6 +1,6 @@
 """Phase 0 of the activation-patching study: build clean/corrupted pairs.
 
-Design (see validation/PATCHING_ROADMAP.md):
+Design (see patching/PATCHING_ROADMAP.md):
   - Within a single dimension (2D / 3D / 4D), find two MC questions that
       * use the same option set (same `type` column, so A/B mean the same thing),
       * differ by exactly ONE contiguous span (a geometric label like EF / GHI / BEHL),
@@ -14,7 +14,7 @@ Output: a JSON file with the clean/corrupted prompts, answer letters, the edit
 token span [start, end), and provenance, ready for Phase 1 (patch_run.py).
 
 Example:
-    python validation/patch_pairs.py \
+    python patching/patch_pairs.py \
         --model-name Qwen/Qwen3.5-9B \
         --dims 2,3,4 --prompt-type simple_prompt \
         --out output/patch_pairs/qwen35_9b.json
@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import csv
 
-from prompting import apply_chat_template, make_prompt_mc, resolve_prompt_key
+from common.prompting import apply_chat_template, make_prompt_mc, resolve_prompt_key
 
 # A geometric reference label is a short run of uppercase letters: a line (EF),
 # plane (GHI) or 3D-hyperplane (BEHL). The corrupted variant swaps this label.

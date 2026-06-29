@@ -58,7 +58,7 @@ denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
 ## 2. フェーズ計画
 
 ### Phase 0 — ペア構築とトークン整列  ← 完了
-`validation/patch_pairs.py`
+`patching/patch_pairs.py`
 - `questions_augmented.csv` から次元内・同type・答え反転・単一スパン編集のペアを自動抽出。
 - 対象モデルのトークナイザで、編集スパンのトークン長一致と整列を検証・フィルタ。
 - **2D/3D の偶然一致不足対策**: `--balance N` で各次元をベンチ同一テンプレの**合成ペア**
@@ -75,11 +75,11 @@ denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
 **実行結果**(Qwen3.5-9B トークナイザ, simple_prompt, `--balance 40 --balance-types 1,2,3`):
 - (次元 × type)= 各40整列(4D type1のみ実データ43)→ **計 363 整列ペア**、全 A→B。
 - 編集スパンは 1〜2 トークン。出力: `output/patch_pairs/qwen35_9b_aligned.json`。
-- コマンド: `python validation/patch_pairs.py --balance 40 --balance-types 1,2,3 --aligned-only --out output/patch_pairs/qwen35_9b_aligned.json`
+- コマンド: `python patching/patch_pairs.py --balance 40 --balance-types 1,2,3 --aligned-only --out output/patch_pairs/qwen35_9b_aligned.json`
 - type3 注記: collinear/coplanar は line-relationship とは別タスク。次元横断比較は type 内で行う。
 
 ### Phase 1 — 残差ストリーム (層 × 位置) スイープ  ← 実装済
-`validation/patch_run.py`
+`patching/patch_run.py`
 - clean を `run_with_cache`、corrupted のキャッシュを取得。各層 L の `blocks.L.hook_resid_post` を
   **特定位置だけ** patch → 最終位置の logit-diff を記録。denoise/noise 両方向。
 - **重要な修正**: 当初の「全位置 patch」は **degenerate**(resid_post 全位置は完全な状態なので
@@ -88,7 +88,7 @@ denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
   これは causal tracing の (層 × 位置) 分解そのもの。`all` は degenerate 確認用に残す。
 - ベースライン選別(clean→A・corrupted→B 両正解、`logit(A)-logit(B)` の符号)をここで実施。
 - 全ペア平均で **層 × 効果** 曲線を (次元 × type) ごとに描画・JSON 出力。
-- 実行: `CUDA_VISIBLE_DEVICES=0 .venv-patch/bin/python validation/patch_run.py
+- 実行: `CUDA_VISIBLE_DEVICES=0 .venv/bin/python patching/patch_run.py
   --pairs output/patch_pairs/qwen35_9b_aligned.json --positions edit,last --out output/patch_run/qwen35_9b`
 - 集計は (次元/type/次元×type/real-vs-synthetic) で分解、type別プロットを出力。
 - **スモーク検証(9ペア)で causal-tracing シグネチャ確認**(denoise, pooled):
@@ -125,8 +125,8 @@ denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
 ## 3. 既存コードの活用
 - モデルロード: `recon_eval.py` の TransformerBridge 初期化を雛形に、SAE抜きの薄いローダを新規追加。
 - プロンプト: `prompting.make_prompt_mc` / `apply_chat_template`(rotation=0 で呼ぶ)。
-- 回答抽出・採点: `validation/ablation_eval._extract_answer`。
-- 可視化: `validation/visualize.py` に層曲線/ヒートマップを追記。
+- 回答抽出・採点: `sae/ablation_eval._extract_answer`。
+- 可視化: `sae/visualize.py` に層曲線/ヒートマップを追記。
 
 ## 4. リスクと分岐 — モデルロード(Phase 1 着手前の最重要決定)
 **実測**: インストール済 `transformer-lens==2.17.0` の `OFFICIAL_MODEL_NAMES` は
@@ -147,9 +147,8 @@ TransformerLens のリリースノートでは新しめのバージョンで Qwe
 - 9B のメモリ → bf16・単一GPUで全層 resid キャッシュが乗るか確認(必要なら層を分割キャッシュ)。
 
 ### 解決済(2026-06-29 スパイク結果)
-- **環境**: 評価env非破壊のため `.venv-patch` を新設(base `.venv` の site-packages を
-  `.pth` でリンクし torch/transformers を再利用)、`transformer-lens==3.4.0` を `--no-deps` で重ねた。
-  起動: `.venv-patch/bin/python ...`。
+- **環境**: 単一 `.venv` に集約。`transformer-lens` 3.3.0 が vllm / sae-lens と共存するため
+  patching 専用 venv は不要(eval・SAE・patching を1環境で実行)。起動: `.venv/bin/python ...`。
 - **ロード経路確定**: `from transformer_lens.model_bridge import TransformerBridge;
   TransformerBridge.boot_transformers("Qwen/Qwen3.5-9B", device="cuda")` で成功。
   32層 / d_model=4096 / d_vocab=248320。`blocks.{L}.hook_resid_post` 発火確認済。

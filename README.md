@@ -1,94 +1,98 @@
 # Multidimensional Geometry Evaluation Project
 
-Evaluate LLM performance on geometry questions across 2D, 3D, and 4D geometric shapes.
+Evaluate LLM performance on geometry questions across 2D, 3D, and 4D shapes, and
+investigate *how* models compute (and fail at) dimensional geometric reasoning via
+activation patching.
+
+> **Current focus:** model evaluation + activation patching. SAE-based analysis
+> (`sae/`) is earlier auxiliary work — kept for reference but **not part of the
+> current experiment**; see [the de-emphasized section below](#validating-sae-activations-legacy).
 
 ## Contents
 
-- [Environment (reference machine)](#environment-reference-machine)
+- [Environment](#environment)
 - [Repository Structure](#repository-structure)
 - [Run Scripts](#run-scripts)
 - [Usage](#usage) — [running evaluations](#running-evaluations) · [output format](#output-format) · [augmenting](#augmenting-questions) · [generating questions](#generating-new-questions-with-gpt)
-- [Validating SAE Activations](#validating-sae-activations)
+- [Activation Patching](#activation-patching-mechanistic-interpretability)
+- [Validating SAE Activations](#validating-sae-activations-legacy) — *legacy, out of current scope*
 - [File Purposes & Gitignore Rationale](#file-purposes--gitignore-rationale)
 
-## Environment (reference machine)
+## Environment
 
-> Snapshot of the host that produced the current results — captured **2026-06-18**. This documents *what was used*, not a hard requirement; the code runs on any CUDA box with vLLM. Refresh with the commands at the end of this section.
+A single virtualenv **`.venv`** runs every experiment — model evaluation (vLLM), activation
+patching (TransformerLens), and the legacy SAE code. Verified packages (Python 3.10.12):
+vllm 0.14.0 · transformer-lens 3.3.0 · sae-lens 6.44.2 · torch 2.9.1 (CUDA) · transformers 5.10.2.
+Patching loads Qwen3.5-9B via TransformerLens's `TransformerBridge` (Qwen3.5 text-only bridge
+support landed in TL 3.2). Current working box: 4 × NVIDIA RTX A6000 48GB.
 
-**Hardware (Azure VM):** 4 × NVIDIA A100 80GB PCIe · 96 vCPU · ~866 GB RAM · ~991 GB disk. The eval scripts use at most 2 GPUs (single-GPU models, or `tensor-parallel-size 2` for 70B-class); the other A100s are free for parallel jobs.
+> The recorded eval sweep under `results/` was produced earlier on a 4 × A100 80GB host
+> (vllm 0.23 / torch 2.11 / Python 3.12). The code is hardware-independent — any CUDA box with
+> vLLM — but 70B-class models in `run_all.sh` need ≥80GB-class GPUs (`tensor-parallel-size 2`).
 
-**OS / toolchain:** Ubuntu 24.04.4 LTS · kernel 6.17.0-1018-azure (x86_64) · NVIDIA driver 595.71.05 (CUDA 13.2) · Python 3.12.3 (`.venv`).
+**Credentials:** Hugging Face token read at runtime from `~/.cache/huggingface/token`
+(exported as `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN`); never hardcoded. Azure OpenAI via env vars (see [Usage](#usage)).
 
-**Key packages** (`.venv`; full pin in `requirements.txt`):
-
-| Package | Version |
-|---|---|
-| vllm | 0.23.0 |
-| torch | 2.11.0+cu130 (CUDA build 13.0) |
-| transformers | 5.12.0 |
-| numpy | 2.3.5 |
-
-**Credentials:** Hugging Face token read at runtime from `~/.cache/huggingface/token` (exported as `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN`); never hardcoded. Azure OpenAI via env vars (see [Usage](#usage)).
-
-**Evaluation runtime config** (`scripts/run_all.sh`): dims `2,3,4` · `dtype=bfloat16` · `max-new-tokens=16` · `temperature=0.1`, `top-p=0.9` · prompt `simple_prompt` (Llama-3.3-70B also `simple_prompt_strict`). GPU scheduling: ≤32B → `tensor-parallel-size 1` (two models in parallel, one per GPU); 70B-class + `Qwen3.5-35B-A3B` → `tensor-parallel-size 2`, sequential. 70B caches (~135 GB each) are deleted after use to manage disk. Results are written to `results/<timestamp>/<model_name>/`.
-
-To refresh this snapshot:
-
-```bash
-nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
-.venv/bin/python --version
-.venv/bin/python -c "import vllm,torch,transformers,numpy; print('vllm',vllm.__version__); print('torch',torch.__version__); print('transformers',transformers.__version__); print('numpy',numpy.__version__)"
-uname -srm; . /etc/os-release && echo "$PRETTY_NAME"; nproc; free -g; df -h /
-```
+**Evaluation runtime config** (`scripts/run_all.sh`): dims `2,3,4` · `dtype=bfloat16` ·
+`max-new-tokens=16` · `temperature=0.1`, `top-p=0.9` · prompt `simple_prompt`
+(Llama-3.3-70B also `simple_prompt_strict`). GPU scheduling: ≤32B → `tensor-parallel-size 1`
+(two models in parallel, one per GPU); 70B-class + `Qwen3.5-35B-A3B` → `tensor-parallel-size 2`,
+sequential. 70B caches (~135 GB each) are deleted after use. Results → `results/<timestamp>/<model_name>/`.
 
 ## Repository Structure
 
-### Git-Tracked Files
+Source code is grouped **by experiment**; each package holds the runner(s) and the
+library code for that experiment. Files shared across experiments live in `common/`.
+
+### Git-Tracked Source
 
 #### Root Level
-- **`evaluate.py`**, **`validate.py`**, **`make_problems.py`** — Thin entry-point wrappers. Each adds the repo root to `sys.path` and runs the corresponding module under `cli/` (`python evaluate.py ...` ≡ `python -m cli.evaluate ...`).
-- **`prompting.py`** — Shared core module. Builds multiple-choice / numeric prompts, applies chat templates, and provides the answer-rotation mechanism (`make_prompt_mc`, `make_prompt_mc_variants`, `make_prompt_numeric`, `remap_answer_for_rotation`). Imported by `cli/` and the tests.
+- **`evaluate.py`**, **`validate.py`**, **`make_problems.py`** — Thin entry-point wrappers. Each adds the repo root to `sys.path` and runs the corresponding module (`python evaluate.py …` ≡ `python -m evaluation.evaluate …`; `validate.py` → `sae.validate`; `make_problems.py` → `evaluation.make_problems`).
 - **`requirements.txt`**, **`requirements-min.txt`** — Python dependencies.
 
-#### CLI Package (`cli/`)
+#### Shared (`common/`)
+- **`prompting.py`** — Shared core used by every experiment. Builds multiple-choice / numeric prompts, applies chat templates, and provides the answer-rotation mechanism (`make_prompt_mc`, `make_prompt_mc_variants`, `make_prompt_numeric`, `make_prompt_numeric_mc_variants`, `remap_answer_for_rotation`).
+
+#### Model Evaluation (`evaluation/`)
 - **`evaluate.py`** — Main evaluation driver (vLLM local models + Azure OpenAI hosted models).
-- **`validate.py`** — SAE-activation validation / probing pipeline.
 - **`make_problems.py`** — GPT-based generation of new 2D/3D/4D question triplets.
-- **`recon_eval.py`** — SAE reconstruction / ablation evaluation utilities.
 
-#### Validation Package (`validation/`)
-- SAE activation I/O, probing, singular-direction analysis, ablation evaluation, and visualization helpers used by `cli/validate.py` and `cli/recon_eval.py`.
+#### Activation Patching (`patching/`)
+Dimensional-geometry activation-patching pipeline (runs under `.venv`). Stages:
+- **`patch_pairs.py`** — Phase 0: build token-aligned clean/corrupted minimal pairs (mined from the benchmark + synthetic, balanced over dimension × type).
+- **`patch_run.py`** — Phase 1: residual-stream (layer × position) patching sweep with denoise/noise and invariance breakdowns; supports `--num-shards`/`--shard-id` for multi-GPU.
+- **`patch_components.py`** — Phase 2: attention (linear-attention) / MLP component-level patching.
+- **`patch_merge.py`** — Merge multi-GPU shard outputs.
+- **`PATCHING_ROADMAP.md`** — Design decisions, methodology, and findings.
 
-#### Data Directory (`data/`)
+#### SAE / Interpretability (`sae/`) — *legacy, out of current scope*
+- SAE-activation validation/probing and reconstruction-error evaluation: **`validate.py`**, **`recon_eval.py`** (runners) plus **`ablation_eval.py`**, **`activation_io.py`**, **`probe.py`**, **`singular.py`**, **`visualize.py`** (helpers). Retained for reference; see [Validating SAE Activations (legacy)](#validating-sae-activations-legacy).
+
+#### Data (`data/`)
 - **`questions.csv`** — Multiple-choice geometry questions. Columns: `2D`, `3D`, `4D`, `answer`, `type`.
-  - `2D/3D/4D`: Question text for each dimension.
-  - `answer`: Correct answer (A, B, C, or D).
-  - `type`: Question category (1, 2, or 3):
-    - **Type 1 — PPC (Parallel / Perpendicular Classification):** A=Parallel, B=Perpendicular, C=Neither, D=Cannot be inferred.
-    - **Type 2 — IC (Intersection Classification):** A=Intersecting, B=Not intersecting, C=Cannot be inferred.
-    - **Type 3 — CC (Collinearity Classification):** A=Yes, B=No, C=Cannot be inferred.
-- **`numeric.csv`** — Integer-answer geometry questions. Columns: `question`, `dimension`, `answer`. At evaluation time each numeric question is scored two ways: free-form (`numeric` type) and as a 4-option multiple choice (`numeric_mc` type — correct value plus 3 *error-mode* distractors derived from characteristic solution mistakes, presented in all 4 cyclic rotations).
-- **`questions_augmented.csv`** / **`numeric_augmented.csv`** — Augmented variants generated by permuting vertex labels. Additional columns: `aug_source_id`, `aug_map`.
+  - `2D/3D/4D`: question text per dimension; `answer`: A–D; `type`: category 1/2/3:
+    - **Type 1 — PPC (Parallel / Perpendicular):** A=Parallel, B=Perpendicular, C=Neither, D=Cannot be inferred.
+    - **Type 2 — IC (Intersection):** A=Intersecting, B=Not intersecting, C=Cannot be inferred.
+    - **Type 3 — CC (Collinearity / coplanarity, Yes/No):** A=Yes, B=No, C=Cannot be inferred.
+- **`numeric.csv`** — Integer-answer questions (`question`, `dimension`, `answer`). Scored both free-form (`numeric`) and as 4-option multiple choice (`numeric_mc` — correct value + 3 error-mode distractors in all 4 cyclic rotations).
+- **`questions_augmented.csv`** / **`numeric_augmented.csv`** — Vertex-label-permuted variants (extra columns `aug_source_id`, `aug_map`). These feed the patching pair construction.
 - **`questions_generated_2000_gpt54.csv`** — GPT-generated question set.
 
-#### Scripts Directory (`scripts/`)
-- **`augment_questions.py`** — Dataset augmentation. Permutes uppercase vertex labels (excluding O, I) to generate question variants. Outputs `data/questions_augmented.csv`.
-- **`augment_numeric.py`** — Numeric-question augmentation (`data/numeric_augmented.csv`).
-- **`run_all.sh`** — The evaluation runner: runs the full 9-model sweep in one memory-safe, disk-aware pass (TP=1 models paired across two GPUs; 70B-class TP=2 sequentially with cache cleanup). Writes all models under one `results/<timestamp>/`. See [Run Scripts](#run-scripts).
-- **`rebuild_semantic_results.py`** — Post-processing: rebuild canonical-frame confusion matrices / per-class accuracy for completed runs, without re-running models.
-- **`local/`** — Gitignored scratch dir for ad-hoc / per-experiment shell scripts (per-family runners, larger-model orchestrators, the SAE-validation helper). Not tracked.
+#### Scripts (`scripts/`)
+- **`augment_questions.py`** / **`augment_numeric.py`** — Dataset augmentation → `data/*_augmented.csv`.
+- **`run_all.sh`** — The evaluation runner: full multi-model sweep in one memory-/disk-aware pass. See [Run Scripts](#run-scripts).
+- **`patch_launch_multigpu.sh`** — Multi-GPU launcher for Phase 1 patching (splits pairs across GPUs, then merges).
+- **`gen_summary.py`** / **`gen_bias.py`** — Build the cross-model `summary.md` and the position-bias analysis from completed runs.
+- **`rebuild_semantic_results.py`** — Rebuild canonical-frame confusion matrices / per-class accuracy without re-running models.
+- **`local/`** — Gitignored scratch dir for ad-hoc per-experiment shell scripts (not tracked).
 
-#### Tests Directory (`tests/`)
-- **`test_baseline_accuracy.py`**, **`test_baseline_by_dimension.py`**, **`test_numeric_debug.py`**, **`test_raw_vs_sae.py`** — Baseline / debugging scripts. They add the current working directory to `sys.path`, so **run them from the repository root** (e.g. `python tests/test_baseline_accuracy.py`).
-
----
+#### Tests (`tests/`)
+- **`test_baseline_accuracy.py`**, **`test_baseline_by_dimension.py`**, **`test_numeric_debug.py`**, **`test_raw_vs_sae.py`** — Baseline / debugging scripts. They add the CWD to `sys.path`, so **run them from the repository root**.
 
 ### Gitignored Directories
-
-- **`results/`** — Evaluation outputs (confusion-matrix PNGs, per-question CSVs, logs). Organized as `results/<timestamp>/<model_name>/` (one timestamp folder per sweep).
-- **`logs/`** — Run logs from the scripts in `scripts/`.
-- **`past_results/`** — Archive of previous runs.
-- **`__pycache__/`**, **`.venv/`**, **`sae_activations/`**, **`output/`** — Build artifacts, virtualenv, and generated activations/visualizations.
+- **`results/`** — Evaluation outputs (`results/<timestamp>/<model_name>/`).
+- **`output/`** — Generated artifacts: `output/patch_pairs/`, `output/patch_run/`, `output/patch_components/` (patching); `output/validate/`, `output/recon_eval/` (legacy SAE).
+- **`logs/`**, **`past_results/`**, **`__pycache__/`**, **`.venv/`**, **`sae_activations/`**, **`analysis/`** — logs, archives, build artifacts, virtualenv, generated activations.
 
 ---
 
@@ -96,7 +100,7 @@ uname -srm; . /etc/os-release && echo "$PRETTY_NAME"; nproc; free -g; df -h /
 
 `scripts/run_all.sh` activates `.venv`, reads the Hugging Face token, schedules GPU placement, and runs the full model sweep, logging to `logs/`.
 
-**Hugging Face token** is never hardcoded. Store it once with restricted permissions and the scripts read it at runtime:
+**Hugging Face token** is never hardcoded:
 
 ```bash
 mkdir -p ~/.cache/huggingface
@@ -104,20 +108,18 @@ printf '%s' "<your_hf_token>" > ~/.cache/huggingface/token
 chmod 600 ~/.cache/huggingface/token
 ```
 
-Scripts then do `HF_TOKEN=$(cat ~/.cache/huggingface/token)`.
-
-**Prompt types:** the sweep uses `simple_prompt`, except Llama-3.3-70B-Instruct which uses `simple_prompt_strict` (it otherwise completes "The answer is …" with "not among the options", producing empty predictions on IC/CC questions). The model list, per-model tensor-parallel size, and prompt types are encoded in `run_all.sh`.
+**Prompt types:** the sweep uses `simple_prompt`, except Llama-3.3-70B-Instruct which uses `simple_prompt_strict`. The model list, per-model tensor-parallel size, and prompt types are encoded in `run_all.sh`.
 
 ```bash
-# Full sweep (auto-timestamps results/<TS>/; runs in the foreground):
+# Full sweep (auto-timestamps results/<TS>/; foreground):
 bash scripts/run_all.sh
 
-# Detached so it survives SSH disconnect, with an explicit timestamp:
+# Detached so it survives SSH disconnect, explicit timestamp:
 RUN_TS=$(date -u +%Y%m%d_%H%M%S) setsid nohup bash scripts/run_all.sh >/dev/null 2>&1 &
 # progress: tail -f logs/run_master_<TS>.log
 ```
 
-Per-model and per-experiment runners (other model families, larger-model orchestrators) live untracked in `scripts/local/`; for one-off single-model runs, call `evaluate.py` directly (see [Usage](#usage)).
+Per-model / per-experiment runners live untracked in `scripts/local/`; for one-off single-model runs, call `evaluate.py` directly (see [Usage](#usage)).
 
 ---
 
@@ -128,53 +130,43 @@ Per-model and per-experiment runners (other model families, larger-model orchest
 From the repository root:
 
 ```bash
-# If evaluating hosted Azure models, export your Azure credentials first:
+# For hosted Azure models, export credentials first:
 export AZURE_OPENAI_API_KEY="<your_api_key>"
 export AZURE_OPENAI_ENDPOINT="<your_endpoint>"
 export AZURE_OPENAI_API_VERSION="<your_api_version>"
 
-# Run with defaults (built-in model list, 2D):
+# Defaults (built-in model list, 2D):
 python evaluate.py
 
-# Evaluate a single local vLLM model for 2D and 3D:
+# A single local vLLM model for 2D and 3D:
 python evaluate.py --models Qwen/Qwen3-32B --dims 2,3
 
-# Multiple models with a specific prompt type and token limit:
+# A 70B-class model with explicit prompt type and tensor parallelism:
 python evaluate.py --models meta-llama/Llama-3.3-70B-Instruct --dims 2,3,4 \
   --prompt-type simple_prompt_strict --max-new-tokens 16 --tensor-parallel-size 2
 ```
 
-Notes:
-- Local models in `--models` (e.g. `Qwen/...`) are loaded via `vllm.LLM`.
-- Hosted/OpenAI-style models (e.g. `gpt-4o`, `gpt-5`) are queried through the Azure OpenAI client when no local vLLM model matches that name. Provide the Azure environment variables above to enable this.
+- Local models in `--models` (e.g. `Qwen/…`) load via `vllm.LLM`.
+- Hosted/OpenAI-style models (e.g. `gpt-4o`, `gpt-5`) go through the Azure OpenAI client when no local vLLM model matches.
 
 Key CLI options:
-- `--models`: comma-separated model names (default: built-in list in the script)
-- `--dims`: comma-separated dimensions (default: `2`)
-- `--batch-size`: batch size for local generation (default: `8`)
-- `--max-new-tokens`: max tokens generated per prompt (default: `2048`; multiple-choice runs typically use `16`)
-- `--prompt-type`: prompt style — one of `with_reasoning`, `without_reasoning`, `simple_prompt`, `simple_prompt_strict`
-- `--no-reasoning`: shortcut to disable chain-of-thought (equivalent to `without_reasoning`)
-- `--greedy` / `--temperature` / `--top-p` / `--top-k` / `--repetition-penalty`: decoding controls
-- `--dtype`, `--gpu-memory-utilization`, `--tensor-parallel-size`, `--max-model-len`: vLLM runtime controls
-- `--results-root`: base directory for results (default: `results`)
-- `--timestamp`: override the run timestamp used to name output folders
+- `--models`, `--dims`, `--batch-size`, `--max-new-tokens`
+- `--prompt-type` (`with_reasoning`, `without_reasoning`, `simple_prompt`, `simple_prompt_strict`); `--no-reasoning`
+- decoding: `--greedy` / `--temperature` / `--top-p` / `--top-k` / `--repetition-penalty`
+- vLLM runtime: `--dtype`, `--gpu-memory-utilization`, `--tensor-parallel-size`, `--max-model-len`
+- `--results-root`, `--timestamp`
 
 ### Output Format
 
-The driver writes to `{results_root}/{timestamp}/{model_name}/` (pass `--timestamp` to group several models under one sweep folder). Some older, curated result sets in this repo were flattened by model name, occasionally with a per-prompt-type sub-folder (e.g. `meta-llama_Llama-3.3-70B-Instruct/simple_prompt_strict/`).
-
 ```
 results/{timestamp}/{model_name}/
-├── results.text                       # Summary statistics (per type, incl. numeric & numeric_mc)
-├── dim_{2,3,4}.log                     # Per-dimension run log
-├── dim_{2,3,4}_per_question.csv        # Per-question predictions
-├── dim_{2,3,4}_correct.csv             # Correct predictions
-├── dim_{2,3,4}_incorrect.csv           # Incorrect predictions
-└── confusion_matrix_{2,3,4}d_type_{1,2,3}.png   # Per-dimension, per-type (PPC/IC/CC) confusion matrices
+├── results.text                       # Summary stats (per type, incl. numeric & numeric_mc)
+├── dim_{2,3,4}.log
+├── dim_{2,3,4}_per_question.csv        # / _correct.csv / _incorrect.csv
+└── confusion_matrix_{2,3,4}d_type_{1,2,3}.png   # PPC/IC/CC confusion matrices
 ```
 
-Confusion matrices are emitted for the multiple-choice types only (PPC/IC/CC); `numeric` and `numeric_mc` are reported as accuracy rows in `results.text`. A cross-model summary (overall and per-dimension / per-type accuracy, plus GT-label bias analysis) can be generated as `results/summary.md`.
+Confusion matrices are emitted for the multiple-choice types only (PPC/IC/CC); `numeric` and `numeric_mc` are reported as accuracy rows in `results.text`. The cross-model summary is built with `python scripts/gen_summary.py` (→ `results/<base>/summary.md`) and position-bias analysis with `python scripts/gen_bias.py`.
 
 ### Augmenting Questions
 
@@ -185,82 +177,77 @@ python scripts/augment_numeric.py       # -> data/numeric_augmented.csv
 
 ### Generating New Questions with GPT
 
-`cli/make_problems.py` generates new 2D/3D/4D aligned triplet questions and saves them as CSV.
+`evaluation/make_problems.py` generates new 2D/3D/4D aligned triplet questions and saves them as CSV.
 
 ```bash
 export AZURE_OPENAI_API_KEY="<your_api_key>"
 export AZURE_OPENAI_ENDPOINT="<your_endpoint>"
 export AZURE_OPENAI_API_VERSION="<your_api_version>"
 
-# Generate 60 rows (called in 20-row batches with different seeds)
 python make_problems.py --model gpt-5 --rows 60 --batch-rows 20 --seed 42 \
   --output data/questions_generated.csv
 ```
 
-Useful options:
-- `--rows`: total rows to generate (default: `20`)
-- `--batch-rows`: rows per API call (default: `20`)
-- `--type-mix`: balance instruction for types 1/2/3 (default: `roughly_even`)
-- `--shapes-mix`: shape diversity instruction (default: `rectangle,triangle,circle`)
-- `--seed`: base seed; each batch increments it (default: `42`)
-- `--allow-missing`: allow `-` in 2D/3D/4D columns
-- `--max-retries`: retries when invalid CSV is returned (default: `3`)
-- `--allow-duplicate-triplets`: allow duplicate `(2D,3D,4D)` rows (off by default)
-- `--tail-retry-margin`: over-request near completion and discard overflow (default: `20`)
-- `--max-duplicate-rows`: maximum allowed duplicated triplet rows (default: `0`)
-- `--min-count-per-type`: minimum count required per type 1/2/3 (default: `1`)
-- `--strict-validation`: fail the run when validation does not pass
-
-The script prints a validation summary after generation (type distribution, duplicate count, pass/fail). Duplicate triplets are filtered during generation, and each batch prompt includes hard uniqueness constraints plus a negative list of already-accepted triplets to reduce repeated templates.
+Useful options: `--rows`, `--batch-rows`, `--type-mix`, `--shapes-mix`, `--seed`, `--allow-missing`, `--max-retries`, `--allow-duplicate-triplets`, `--tail-retry-margin`, `--max-duplicate-rows`, `--min-count-per-type`, `--strict-validation`. The script prints a validation summary (type distribution, duplicate count, pass/fail) after generation.
 
 ---
 
-## Validating SAE Activations
+## Activation Patching (Mechanistic Interpretability)
 
-`cli/validate.py` loads cached feature-activation tensors if present, or generates them on demand and caches under `sae_activations/`.
+Causal localization of dimensional geometric reasoning in **Qwen3.5-9B**, via residual-stream
+and component activation patching. Runs under the single **`.venv`** (transformer-lens 3.3.0).
+Full design and findings: [`patching/PATCHING_ROADMAP.md`](patching/PATCHING_ROADMAP.md).
+
+**Method.** Clean/corrupted minimal pairs differ by exactly one token (a geometric label) that
+flips the answer (A↔B). Patch one layer at one token position, read the normalized recovery of the
+answer logit difference `logit(A) − logit(B)`. Only pairs the model answers correctly in *both*
+conditions are traced.
 
 ```bash
-python validate.py \
-  --output-dir sae_activations \
-  --model-name google/gemma-2-9b \
-  --layer layer_20 \
-  --sae-release gemma-scope-9b-pt-mlp-canonical \
-  --sae-id layer_20/width_16k/canonical \
-  --singular-dims 4,3 \
-  --singular-method both \
-  --topk 10
+# Phase 0 — build token-aligned pairs (dimension × type1/2/3, balanced):
+.venv/bin/python patching/patch_pairs.py \
+  --balance 40 --balance-types 1,2,3 --aligned-only \
+  --out output/patch_pairs/qwen35_9b_aligned.json
+
+# Phase 1 — residual-stream (layer × position) sweep, multi-GPU then merge:
+bash scripts/patch_launch_multigpu.sh output/patch_pairs/qwen35_9b_aligned.json output/patch_run/qwen35_9b 4
+#   (single GPU: .venv/bin/python patching/patch_run.py --pairs … --out … --positions edit,last)
+
+# Phase 2 — attention (linear-attn) / MLP component patching:
+.venv/bin/python patching/patch_components.py \
+  --pairs output/patch_pairs/qwen35_9b_aligned.json --out output/patch_components/qwen35_9b
 ```
 
-Key options:
-- `--prompt-type`: select prompt style if multiple activation files exist (`auto`, `with_reasoning`, `without_reasoning`, `simple_prompt`, `simple_prompt_strict`).
-- `--results-dir`: where to save plots/visualizations (default: `output/validate`).
-- `--visualize-topk-sentences`: number of top prompts per dimension to visualize.
-- `--filter-correct-dir`: use only evaluate-correct questions (expects `dim_{d}_correct.csv` or `dim_{d}_per_question.csv`).
-- `--no-visualize`: disable visualization output.
-- `--probe-random-samples`: number of random feature sets for the aggregated random-baseline probe.
-- `--sae-release`, `--sae-id`: override SAE source.
+Outputs: `output/patch_*/…/patch_results.json` + per-effect-key plots under `plots/`. Aggregates are
+broken down by dimension, type, dimension×type, and real-vs-synthetic so circuit invariance can be tested.
 
-Activation generation options (used only when cached activations are missing):
-- `--activation-questions-csv`, `--activation-numeric-csv`
-- `--activation-pooling` (`max`, `mean`, `last`)
-- `--activation-reasoning` (`with`, `without`, `both`)
-- `--activation-batch-size`
-- `--activation-device`, `--activation-fallback-cpu`
+**Key findings (Phase 0–1).**
+- **Dimension-invariant circuit:** on problems the model solves, edit-token information is read in early
+  layers (handoff ~L8–12) and the answer is assembled at the final position from ~L19 — the same in 2D/3D/4D.
+- **4D difficulty is a failure *rate*, not circuit relocation:** baseline-correct pairs fall from 120/120 (2D)
+  to 51/123 (4D); the 4D cases that *do* solve use the same-layer circuit.
+- **4D coplanarity collapses to a confident wrong "No":** for CC (Yes/No), the true-Yes logit margin degrades
+  monotonically (2D +1.86 → 3D +1.42 → 4D −0.81); "Cannot" stays lowest. The aggregate 64% 4D-CC accuracy
+  hides this Yes-recall collapse — controlled pairs expose it.
 
-`scripts/local/run_validation.sh` (local-only, gitignored) saves validation outputs to a unique run directory by default:
-`output/validate/{timestamp}_{model_name}_dim{d1vsd2}`, storing run conditions in `run_conditions_shell.json` and `run_conditions_validate.json`. Feature-based probes are reported per method (`diff`, `reason`); the random probe is reported once as `random-baseline`, averaged over multiple samplings.
+---
 
+## Validating SAE Activations (legacy)
+
+> Earlier auxiliary work, **not part of the current experiment**. Retained for reference; runs under `.venv`.
+
+`sae/validate.py` loads cached feature-activation tensors (or generates them on demand under `sae_activations/`)
+and runs probing / singular-direction analysis; `sae/recon_eval.py` measures SAE reconstruction-error impact.
+
+```bash
+python validate.py --output-dir sae_activations --model-name google/gemma-2-9b --layer layer_20 \
+  --sae-release gemma-scope-9b-pt-mlp-canonical --sae-id layer_20/width_16k/canonical \
+  --singular-dims 4,3 --singular-method both --topk 10
+
+python sae/recon_eval.py --model-name <hf-model> --sae-release <release> --sae-id <id> --dims 3,4
 ```
-output/validate/
-├── reason_score_rank_dim4_dim3.png
-└── visualize/
-    ├── diff/
-    │   ├── feature_123_rank_1_dim4_dim3.png
-    │   └── feature_123_rank_1_dim4_dim3.json
-    └── reason/
-        ├── feature_456_rank_1_dim4_dim3.png
-        └── feature_456_rank_1_dim4_dim3.json
-```
+
+Outputs go to `output/validate/` and `output/recon_eval/`. See module docstrings / `--help` for the full option set.
 
 ---
 
@@ -268,12 +255,13 @@ output/validate/
 
 | File/Dir | Git-Tracked | Reason |
 |----------|:-----------:|--------|
-| `cli/`, `prompting.py`, `validation/` | ✓ | Core source; versioned for reproducibility |
+| `common/`, `evaluation/`, `patching/` | ✓ | Core source (current experiments); versioned for reproducibility |
+| `sae/` | ✓ | Legacy SAE source; versioned but out of current scope |
 | `evaluate.py` / `validate.py` / `make_problems.py` | ✓ | Entry-point wrappers |
 | `data/*.csv` | ✓ | Source datasets |
-| `scripts/*.py`, `scripts/*.sh` | ✓ | Data generation + evaluation runners |
+| `scripts/*.py`, `scripts/*.sh` | ✓ | Data generation, evaluation + patching runners, analysis |
 | `tests/*.py` | ✓ | Baseline / debugging scripts |
-| `results/` | ✗ | Large generated outputs (PNGs + CSVs + logs); stored locally |
-| `past_results/` | ✗ | Archive of previous runs; local-only |
-| `logs/` | ✗ | Runtime logs; local debugging only |
-| `__pycache__/`, `.venv/`, `output/`, `sae_activations/` | ✗ | Build artifacts / virtualenv / generated data |
+| `results/`, `past_results/` | ✗ | Large generated eval outputs / archives; local-only |
+| `output/` | ✗ | Generated patching + SAE artifacts; local-only |
+| `logs/` | ✗ | Runtime logs |
+| `__pycache__/`, `.venv/`, `sae_activations/`, `analysis/` | ✗ | Build artifacts / virtualenv / generated data |

@@ -1,6 +1,9 @@
+# Minimal high-level dependencies for the unified .venv (full pins: requirements.txt).
+# One environment runs evaluation (vllm), activation patching (transformer-lens), and legacy SAE (sae-lens).
 numpy
 matplotlib
 torch
 openai
 vllm
 sae-lens
+transformer-lens

@@ -13,7 +13,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.getcwd())
 
-from prompting import make_prompt_mc
+from common.prompting import make_prompt_mc
 
 def load_all_data(questions_csv, numeric_csv, max_per_type=None):
     """Load questions and numeric data separately."""

@@ -8,7 +8,7 @@ import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from openai import AzureOpenAI
 

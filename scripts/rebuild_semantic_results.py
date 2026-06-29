@@ -5,7 +5,7 @@ frame for already-completed runs, without re-running any model.
 
 Background
 ----------
-`cli/evaluate.py` rotates the answer choices through every cyclic position and
+`evaluation/evaluate.py` rotates the answer choices through every cyclic position and
 remaps the gold letter accordingly. The per-question CSV therefore stores
 `ground_truth_normalized` / `predicted_normalized` in the *presented-slot*
 frame (the letter as shown in that rotated variant), NOT the original meaning.
@@ -18,7 +18,7 @@ the canonical pre-rotation frame, and then:
   * computes accuracy grouped by canonical meaning (semantic) and, for
     comparison, by presented slot (positional)
 
-It mirrors the canonical-frame logic now built into cli/evaluate.py, so the
+It mirrors the canonical-frame logic now built into evaluation/evaluate.py, so the
 artifacts match what a fresh run would produce.
 
 Usage:
@@ -35,7 +35,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.getcwd())
-from prompting import _choice_count_for_type, _parse_option_choices, options  # noqa: E402
+from common.prompting import _choice_count_for_type, _parse_option_choices, options  # noqa: E402
 
 csv.field_size_limit(10 ** 7)
 

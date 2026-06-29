@@ -26,7 +26,7 @@ a real, separated behavioral contrast to trace.
 Model is loaded once via TransformerBridge (see PATCHING_ROADMAP.md). Run with
 the patching venv:
 
-    CUDA_VISIBLE_DEVICES=0 .venv-patch/bin/python validation/patch_run.py \
+    CUDA_VISIBLE_DEVICES=0 .venv/bin/python patching/patch_run.py \
         --pairs output/patch_pairs/qwen35_9b_aligned.json \
         --out output/patch_run/qwen35_9b
 """
@@ -34,9 +34,8 @@ import argparse
 import json
 import os
 import re
-import sys
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import torch
 

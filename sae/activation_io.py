@@ -15,8 +15,7 @@ try:
 except ImportError:
     _HAS_BRIDGE = False
 
-from prompting import (
-	make_prompt_mc,
+from common.prompting import (
 	make_prompt_mc_variants,
 	make_prompt_numeric,
 	resolve_prompt_key,
