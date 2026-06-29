@@ -9,3 +9,4 @@ sae_activations
 tmp
 .venv
 scripts/local/
+.venv-patch
