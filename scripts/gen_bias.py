@@ -15,6 +15,8 @@ BASE = os.environ.get("EVAL_BASE", "results/final_greedy_20260626")
 SUMMARY = os.path.join(ROOT, BASE, "summary.md")
 
 MODELS = [
+ ("Qwen3.5-2B",                 f"{BASE}/Qwen_Qwen3.5-2B"),
+ ("Qwen3.5-4B",                 f"{BASE}/Qwen_Qwen3.5-4B"),
  ("Qwen3.5-9B",                 f"{BASE}/Qwen_Qwen3.5-9B"),
  ("Qwen3.5-27B",                f"{BASE}/Qwen_Qwen3.5-27B"),
  ("Qwen3.5-35B-A3B",            f"{BASE}/Qwen_Qwen3.5-35B-A3B"),
@@ -22,10 +24,12 @@ MODELS = [
  ("Qwen3-30B-A3B",              f"{BASE}/Qwen_Qwen3-30B-A3B"),
  ("Qwen3-32B",                  f"{BASE}/Qwen_Qwen3-32B"),
  ("Qwen3-Next-80B-A3B-Instruct",f"{BASE}/Qwen_Qwen3-Next-80B-A3B-Instruct"),
- ("Qwen3-235B-A22B-FP8",        f"{BASE}/Qwen_Qwen3-235B-A22B-FP8"),
+ ("gemma-4-E4B-it",             f"{BASE}/google_gemma-4-E4B-it"),
  ("gemma-4-12B-it",             f"{BASE}/google_gemma-4-12B-it"),
+ ("gemma-4-26B-A4B-it",         f"{BASE}/google_gemma-4-26B-A4B-it"),
  ("gemma-4-31B-it",             f"{BASE}/google_gemma-4-31B-it"),
- ("gpt-oss-120b",               f"{BASE}/openai_gpt-oss-120b"),
+ ("Olmo-3-7B-Instruct",         f"{BASE}/allenai_Olmo-3-7B-Instruct"),
+ ("Olmo-3-7B-RL-Zero-Math",     f"{BASE}/allenai_Olmo-3-7B-RL-Zero-Math"),
 ]
 
 

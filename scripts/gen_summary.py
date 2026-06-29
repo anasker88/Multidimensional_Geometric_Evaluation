@@ -10,6 +10,8 @@ OUT = os.path.join(ROOT, BASE, "summary.md")
 
 # (display, dir = results/<BASE>/<model_safe>, prompt, TP, maxtok)
 MODELS = [
+ ("Qwen3.5-2B",                 f"{BASE}/Qwen_Qwen3.5-2B",                 "simple_prompt", 1, 16),
+ ("Qwen3.5-4B",                 f"{BASE}/Qwen_Qwen3.5-4B",                 "simple_prompt", 1, 16),
  ("Qwen3.5-9B",                 f"{BASE}/Qwen_Qwen3.5-9B",                 "simple_prompt", 1, 16),
  ("Qwen3.5-27B",                f"{BASE}/Qwen_Qwen3.5-27B",                "simple_prompt", 2, 16),
  ("Qwen3.5-35B-A3B",            f"{BASE}/Qwen_Qwen3.5-35B-A3B",            "simple_prompt", 2, 16),
@@ -17,10 +19,12 @@ MODELS = [
  ("Qwen3-30B-A3B",              f"{BASE}/Qwen_Qwen3-30B-A3B",              "simple_prompt", 2, 16),
  ("Qwen3-32B",                  f"{BASE}/Qwen_Qwen3-32B",                  "simple_prompt", 2, 16),
  ("Qwen3-Next-80B-A3B-Instruct",f"{BASE}/Qwen_Qwen3-Next-80B-A3B-Instruct","simple_prompt", 4, 16),
- ("Qwen3-235B-A22B-FP8",        f"{BASE}/Qwen_Qwen3-235B-A22B-FP8",        "simple_prompt", 4, 16),
+ ("gemma-4-E4B-it",             f"{BASE}/google_gemma-4-E4B-it",           "simple_prompt", 1, 16),
  ("gemma-4-12B-it",             f"{BASE}/google_gemma-4-12B-it",           "simple_prompt", 1, 16),
+ ("gemma-4-26B-A4B-it",         f"{BASE}/google_gemma-4-26B-A4B-it",       "simple_prompt", 2, 16),
  ("gemma-4-31B-it",             f"{BASE}/google_gemma-4-31B-it",           "simple_prompt", 2, 16),
- ("gpt-oss-120b",               f"{BASE}/openai_gpt-oss-120b",             "simple_prompt_strict + reasoning_effort=low", 4, 512),
+ ("Olmo-3-7B-Instruct",         f"{BASE}/allenai_Olmo-3-7B-Instruct",      "simple_prompt", 1, 16),
+ ("Olmo-3-7B-RL-Zero-Math",     f"{BASE}/allenai_Olmo-3-7B-RL-Zero-Math",  "simple_prompt", 1, 16),
 ]
 TYPES = ["1","2","3","numeric","numeric_mc"]
 TYPELABEL = {"1":"PPC","2":"IC","3":"CC","numeric":"Numeric","numeric_mc":"Numeric-MC"}
@@ -105,13 +109,13 @@ L.append("\n## 実行条件 / Reproduction\n")
 L.append("sampling 系は全ラン共通でデフォルト値（コマンドで上書きせず）。\n")
 L.append("| 項目 | 値 |")
 L.append("|---|---|")
-for k, v in [("temperature", "0.1"), ("top_p", "0.9"), ("top_k", "0 (無効, vLLM内部で -1)"),
-             ("repetition_penalty", "1.1"), ("decoding", "do_sample=True（greedy 不使用）"),
+for k, v in [("decoding", "greedy (do_sample=False; vLLM temperature=0)"),
+             ("repetition_penalty", "1.0"),
+             ("top_p / top_k", "1.0 / -1 (greedy 下で無効)"),
              ("seed", "0 (vLLM 既定)"), ("batch_size", "8"),
              ("dtype", "bfloat16"), ("gpu_memory_utilization", "0.85"),
-             ("max_new_tokens", "16（gpt-oss のみ 512）"), ("dims", "2,3,4")]:
+             ("max_new_tokens", "16"), ("dims", "2,3,4")]:
     L.append(f"| {k} | {v} |")
-L.append("\n**重要(再現上の注意)**: gpt-oss(MXFP4) は MoEカーネルを実行時 ninja でビルドするため、`source .venv/bin/activate`（`.venv/bin` を PATH に通す）で起動すること。未activateだと `ninja` 不検出 → CUDA illegal memory access で失敗する。\n")
 L.append("\n### モデル別の prompt / TP / max_new_tokens\n")
 L.append("| モデル | prompt_type | TP | max_new_tokens |")
 L.append("|---|---|---|---|")
@@ -182,7 +186,7 @@ for name, d, _, _, _ in MODELS:
         if dim in by:
             o = overall(by[dim]); per[dim] = acc(o); te += o[2]; tt += o[0]
     rank.append((name, per.get("2"), per.get("3"), per.get("4"), 100 * te / tt if tt else None))
-for name, a2, a3, a4, em in sorted(rank, key=lambda x: -(x[1] or -1)):
+for name, a2, a3, a4, em in rank:  # MODELS order (系列ごと); not score-sorted
     L.append(f"| {name} | {_f(a2)} | {_f(a3)} | {_f(a4)} | {_f(em)} |")
 
 L.append("\n## 信頼度 confidence（モデルが選んだ答えトークンの平均確率）\n")
