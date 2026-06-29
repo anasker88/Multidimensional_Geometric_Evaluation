@@ -11,3 +11,6 @@ tmp
 scripts/local/
 .venv-patch
 data/*.csv
+.git-results/
+analysis/
+README.md
