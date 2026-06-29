@@ -263,6 +263,10 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0, help="process only first N aligned pairs (smoke test)")
     ap.add_argument("--margin", type=float, default=0.0, help="baseline logit-diff margin")
     ap.add_argument("--out", default="output/patch_run/qwen35_9b")
+    ap.add_argument("--num-shards", type=int, default=1,
+                    help="total number of GPU shards (for multi-GPU runs)")
+    ap.add_argument("--shard-id", type=int, default=0,
+                    help="index of this shard [0, num-shards)")
     args = ap.parse_args()
 
     directions = [d.strip() for d in args.directions.split(",") if d.strip()]
@@ -280,7 +284,10 @@ def main() -> None:
                 sel.append(p)
                 per_dim[p["dimension"]] += 1
         pairs = sel
-    print(f"Loaded {len(pairs)} aligned pairs from {args.pairs}")
+    if args.num_shards > 1:
+        pairs = pairs[args.shard_id::args.num_shards]
+    print(f"Loaded {len(pairs)} aligned pairs from {args.pairs}"
+          + (f" (shard {args.shard_id}/{args.num_shards})" if args.num_shards > 1 else ""))
 
     print(f"Loading {args.model_name} via TransformerBridge (slow, ~8min)...")
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -311,7 +318,9 @@ def main() -> None:
     agg = _aggregate(results)
 
     os.makedirs(args.out, exist_ok=True)
-    out_json = os.path.join(args.out, "patch_results.json")
+    fname = (f"patch_results_shard{args.shard_id:02d}.json"
+             if args.num_shards > 1 else "patch_results.json")
+    out_json = os.path.join(args.out, fname)
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump({
             "metadata": {
@@ -334,7 +343,8 @@ def main() -> None:
             pk = max(range(len(m)), key=lambda i: m[i])
             print(f"  {g:>8}: peak L{layers[pk]} = {m[pk]:+.3f}  (n={cells[g]['n_pairs']})")
 
-    _plot(agg, layers, os.path.join(args.out, "plots"))
+    if args.num_shards == 1:
+        _plot(agg, layers, os.path.join(args.out, "plots"))
 
 
 if __name__ == "__main__":
