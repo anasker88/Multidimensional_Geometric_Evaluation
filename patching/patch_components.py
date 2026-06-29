@@ -5,9 +5,15 @@ edit-token info is read early (handoff ~L8-12) and the answer is assembled at
 the final position late (~L19+). Phase 2 asks WHICH COMPONENT carries it, by
 patching the additive component outputs instead of the full residual stream:
 
-  - attn: blocks.L.linear_attn.hook_out   (Qwen3.5 uses LINEAR attention; the
-          standard hook_attn_out alias is absent, so we target linear_attn.hook_out)
-  - mlp:  blocks.L.hook_mlp_out
+  - attn: the per-layer attention output
+  - mlp:  the per-layer MLP output
+
+The exact hook names vary by architecture, so they are auto-detected from the model's
+hook_dict (see _COMPONENT_CANDIDATES): Qwen3.5 exposes LINEAR attention as
+`blocks.L.linear_attn.hook_out`, while standard-attention models (Qwen3, gemma, llama, ...)
+expose `blocks.L.attn.hook_out` / `blocks.L.hook_attn_out`. A component with no matching
+hook for the chosen model is skipped with a warning. So this runs across the evaluated
+model families via --model-name, not only Qwen3.5.
 
 Unlike resid_post, component outputs are incremental writes, so patching them is
 informative (not the degenerate all-1.0 of full-state resid patching). We still
@@ -49,23 +55,27 @@ from patch_run import (  # reuse Phase-1 helpers unchanged
     _run_with_cache_resid,  # generic: caches any hooks matching names_filter
 )
 
-# component name -> hook-name template (verified present in the bridge hook_dict)
-_COMPONENTS = {
-    "attn": "blocks.{L}.linear_attn.hook_out",
-    "mlp": "blocks.{L}.hook_mlp_out",
+# Candidate per-layer output-hook templates per component, tried in order; the first
+# whose layers exist in the model's hook_dict is used. Covers Qwen3.5 linear attention,
+# TransformerBridge canonical names, and classic HookedTransformer names, so the pipeline
+# works across the evaluated model families (Qwen3/3.5, gemma, llama, ...), not just Qwen3.5.
+_COMPONENT_CANDIDATES = {
+    "attn": ["blocks.{L}.linear_attn.hook_out", "blocks.{L}.attn.hook_out", "blocks.{L}.hook_attn_out"],
+    "mlp": ["blocks.{L}.hook_mlp_out", "blocks.{L}.mlp.hook_out"],
 }
 
 
-def _component_layers(model, component: str) -> List[int]:
-    tmpl = _COMPONENTS[component]
-    prefix, suffix = tmpl.split("{L}")
-    pat = re.compile(re.escape(prefix) + r"(\d+)" + re.escape(suffix) + r"$")
-    layers = []
-    for h in model.hook_dict.keys():
-        m = pat.fullmatch(h)
-        if m:
-            layers.append(int(m.group(1)))
-    return sorted(set(layers))
+def _resolve_component_hooks(model, component: str):
+    """Return (hook_template, sorted_layers) for the first candidate present in the
+    model's hook_dict; (None, []) if none match this architecture."""
+    hooks = set(model.hook_dict.keys())
+    for tmpl in _COMPONENT_CANDIDATES[component]:
+        prefix, suffix = tmpl.split("{L}")
+        pat = re.compile(re.escape(prefix) + r"(\d+)" + re.escape(suffix) + r"$")
+        layers = sorted({int(m.group(1)) for h in hooks for m in [pat.fullmatch(h)] if m})
+        if layers:
+            return tmpl, layers
+    return None, []
 
 
 @torch.no_grad()
@@ -73,6 +83,7 @@ def process_pair(
     model,
     pair: Dict,
     components: List[str],
+    hooks_by_comp: Dict[str, str],
     layers_by_comp: Dict[str, List[int]],
     directions: List[str],
     pos_modes: List[str],
@@ -91,7 +102,7 @@ def process_pair(
     seq_len = clean_toks.shape[1]
     pos_sets = _position_sets(pair, seq_len, pos_modes)
 
-    hook_names = [_COMPONENTS[c].format(L=L) for c in components for L in layers_by_comp[c]]
+    hook_names = [hooks_by_comp[c].format(L=L) for c in components for L in layers_by_comp[c]]
     clean_cache = _run_with_cache_resid(model, clean_toks, hook_names)
     corr_cache = _run_with_cache_resid(model, corr_toks, hook_names)
 
@@ -112,7 +123,7 @@ def process_pair(
             for pmode, positions in pos_sets.items():
                 eff = []
                 for L in layers_by_comp[comp]:
-                    hk = _COMPONENTS[comp].format(L=L)
+                    hk = hooks_by_comp[comp].format(L=L)
                     donor = donor_cache[hk]
                     logits = model.run_with_hooks(
                         base_toks, fwd_hooks=[(hk, _make_patch_hook(donor, positions))])
@@ -145,8 +156,8 @@ def main() -> None:
     directions = [d.strip() for d in args.directions.split(",") if d.strip()]
     pos_modes = [p.strip() for p in args.positions.split(",") if p.strip()]
     for c in components:
-        if c not in _COMPONENTS:
-            raise ValueError(f"unknown component {c}; choose from {list(_COMPONENTS)}")
+        if c not in _COMPONENT_CANDIDATES:
+            raise ValueError(f"unknown component {c}; choose from {list(_COMPONENT_CANDIDATES)}")
 
     with open(args.pairs, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -169,23 +180,30 @@ def main() -> None:
     model = TransformerBridge.boot_transformers(args.model_name, device=args.device)
     model.eval()
 
+    hooks_by_comp: Dict[str, str] = {}
     layers_by_comp: Dict[str, List[int]] = {}
-    for c in components:
-        avail = _component_layers(model, c)
-        if args.layers == "all":
-            layers_by_comp[c] = avail
-        else:
-            want = {int(x) for x in args.layers.split(",")}
-            layers_by_comp[c] = [L for L in avail if L in want]
-        print(f"  {c}: {len(avail)} layers available -> patching {len(layers_by_comp[c])}")
-    # layer axis for plotting/merge: assume both components share the same layer set
+    want = None if args.layers == "all" else {int(x) for x in args.layers.split(",")}
+    for c in list(components):
+        tmpl, avail = _resolve_component_hooks(model, c)
+        if not avail:
+            print(f"  WARNING: no '{c}' output hook for this architecture; skipping "
+                  f"(tried {_COMPONENT_CANDIDATES[c]}).")
+            components.remove(c)
+            continue
+        sel = avail if want is None else [L for L in avail if L in want]
+        hooks_by_comp[c] = tmpl
+        layers_by_comp[c] = sel
+        print(f"  {c}: hook '{tmpl}' -> {len(avail)} layers (patching {len(sel)})")
+    if not components:
+        raise SystemExit("No patchable components resolved for this model architecture; aborting.")
+    # layer axis for plotting/merge: union across components
     layers = sorted(set().union(*layers_by_comp.values()))
 
     from tqdm.auto import tqdm
     results: List[Dict] = []
     n_ok = 0
     for p in tqdm(pairs, desc="pairs", unit="pair"):
-        r = process_pair(model, p, components, layers_by_comp, directions, pos_modes, args.margin)
+        r = process_pair(model, p, components, hooks_by_comp, layers_by_comp, directions, pos_modes, args.margin)
         if r is None:
             continue
         results.append(r)
@@ -195,7 +213,8 @@ def main() -> None:
     os.makedirs(args.out, exist_ok=True)
     payload_meta = {
         "model_name": args.model_name, "pairs_file": args.pairs, "layers": layers,
-        "components": components, "directions": directions, "positions": pos_modes,
+        "components": components, "component_hooks": hooks_by_comp,
+        "directions": directions, "positions": pos_modes,
         "margin": args.margin, "n_pairs": len(results), "n_baseline_ok": n_ok,
     }
     if args.num_shards > 1:

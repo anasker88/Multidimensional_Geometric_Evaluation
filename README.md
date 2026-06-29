@@ -47,8 +47,7 @@ library code for that experiment. Files shared across experiments live in `commo
 ### Git-Tracked Source
 
 #### Root Level
-- **`evaluate.py`**, **`validate.py`**, **`make_problems.py`** — Thin entry-point wrappers. Each adds the repo root to `sys.path` and runs the corresponding module (`python evaluate.py …` ≡ `python -m evaluation.evaluate …`; `validate.py` → `sae.validate`; `make_problems.py` → `evaluation.make_problems`).
-- **`requirements.txt`**, **`requirements-min.txt`** — Python dependencies.
+- **`requirements.txt`**, **`requirements-min.txt`** — Python dependencies. Run scripts as `python <package>/<module>.py …` from the repo root (each script adds the repo root to `sys.path`).
 
 #### Shared (`common/`)
 - **`prompting.py`** — Shared core used by every experiment. Builds multiple-choice / numeric prompts, applies chat templates, and provides the answer-rotation mechanism (`make_prompt_mc`, `make_prompt_mc_variants`, `make_prompt_numeric`, `make_prompt_numeric_mc_variants`, `remap_answer_for_rotation`).
@@ -119,7 +118,7 @@ RUN_TS=$(date -u +%Y%m%d_%H%M%S) setsid nohup bash scripts/run_all.sh >/dev/null
 # progress: tail -f logs/run_master_<TS>.log
 ```
 
-Per-model / per-experiment runners live untracked in `scripts/local/`; for one-off single-model runs, call `evaluate.py` directly (see [Usage](#usage)).
+Per-model / per-experiment runners live untracked in `scripts/local/`; for one-off single-model runs, call `python evaluation/evaluate.py` directly (see [Usage](#usage)).
 
 ---
 
@@ -136,13 +135,13 @@ export AZURE_OPENAI_ENDPOINT="<your_endpoint>"
 export AZURE_OPENAI_API_VERSION="<your_api_version>"
 
 # Defaults (built-in model list, 2D):
-python evaluate.py
+python evaluation/evaluate.py
 
 # A single local vLLM model for 2D and 3D:
-python evaluate.py --models Qwen/Qwen3-32B --dims 2,3
+python evaluation/evaluate.py --models Qwen/Qwen3-32B --dims 2,3
 
 # A 70B-class model with explicit prompt type and tensor parallelism:
-python evaluate.py --models meta-llama/Llama-3.3-70B-Instruct --dims 2,3,4 \
+python evaluation/evaluate.py --models meta-llama/Llama-3.3-70B-Instruct --dims 2,3,4 \
   --prompt-type simple_prompt_strict --max-new-tokens 16 --tensor-parallel-size 2
 ```
 
@@ -184,7 +183,7 @@ export AZURE_OPENAI_API_KEY="<your_api_key>"
 export AZURE_OPENAI_ENDPOINT="<your_endpoint>"
 export AZURE_OPENAI_API_VERSION="<your_api_version>"
 
-python make_problems.py --model gpt-5 --rows 60 --batch-rows 20 --seed 42 \
+python evaluation/make_problems.py --model gpt-5 --rows 60 --batch-rows 20 --seed 42 \
   --output data/questions_generated.csv
 ```
 
@@ -197,6 +196,10 @@ Useful options: `--rows`, `--batch-rows`, `--type-mix`, `--shapes-mix`, `--seed`
 Causal localization of dimensional geometric reasoning in **Qwen3.5-9B**, via residual-stream
 and component activation patching. Runs under the single **`.venv`** (transformer-lens 3.3.0).
 Full design and findings: [`patching/PATCHING_ROADMAP.md`](patching/PATCHING_ROADMAP.md).
+
+The pipeline is **model-general** — every stage takes `--model-name` and runs on the evaluated
+model families that `TransformerBridge` can load (Qwen3/3.5, gemma, llama, …); Qwen3.5-9B is the
+studied default. Phase 2 auto-detects per-architecture attention/MLP hooks. See [`patching/README.md`](patching/README.md).
 
 **Method.** Clean/corrupted minimal pairs differ by exactly one token (a geometric label) that
 flips the answer (A↔B). Patch one layer at one token position, read the normalized recovery of the
@@ -240,7 +243,7 @@ broken down by dimension, type, dimension×type, and real-vs-synthetic so circui
 and runs probing / singular-direction analysis; `sae/recon_eval.py` measures SAE reconstruction-error impact.
 
 ```bash
-python validate.py --output-dir sae_activations --model-name google/gemma-2-9b --layer layer_20 \
+python sae/validate.py --output-dir sae_activations --model-name google/gemma-2-9b --layer layer_20 \
   --sae-release gemma-scope-9b-pt-mlp-canonical --sae-id layer_20/width_16k/canonical \
   --singular-dims 4,3 --singular-method both --topk 10
 
@@ -257,7 +260,6 @@ Outputs go to `output/validate/` and `output/recon_eval/`. See module docstrings
 |----------|:-----------:|--------|
 | `common/`, `evaluation/`, `patching/` | ✓ | Core source (current experiments); versioned for reproducibility |
 | `sae/` | ✓ | Legacy SAE source; versioned but out of current scope |
-| `evaluate.py` / `validate.py` / `make_problems.py` | ✓ | Entry-point wrappers |
 | `data/*.csv` | ✓ | Source datasets |
 | `scripts/*.py`, `scripts/*.sh` | ✓ | Data generation, evaluation + patching runners, analysis |
 | `tests/*.py` | ✓ | Baseline / debugging scripts |

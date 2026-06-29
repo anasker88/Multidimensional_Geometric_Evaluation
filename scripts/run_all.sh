@@ -36,7 +36,7 @@ run1(){  # gpus model tp mem prompt maxtok [extra args...]
   local gpus="$1" model="$2" tp="$3" mem="$4" prompt="$5" maxtok="$6"; shift 6
   local safe="${model//\//_}"
   log ">>> START $model (GPU=$gpus TP=$tp prompt=$prompt maxtok=$maxtok $*)"
-  CUDA_VISIBLE_DEVICES="$gpus" python evaluate.py \
+  CUDA_VISIBLE_DEVICES="$gpus" python evaluation/evaluate.py \
     --models "$model" --dims "$DIMS" \
     --tensor-parallel-size "$tp" --gpu-memory-utilization "$mem" \
     --dtype bfloat16 --max-new-tokens "$maxtok" --prompt-type "$prompt" "$@" \
