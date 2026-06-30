@@ -233,7 +233,11 @@ def _plot(agg: Dict, layers: List[int], out_dir: str) -> None:
         for ax, panel in zip(axes[0], panels):
             groups = agg[k].get(panel, {})
             for g, stats in groups.items():
-                ax.plot(layers, stats["mean"], marker="o", ms=2.5,
+                # a component may cover a subset of layers (e.g. Qwen3.5 hybrid
+                # attention: linear_attn on only some layers), so the curve can be
+                # shorter than the global layer axis; fall back to an ordinal x-axis.
+                xs = layers if len(stats["mean"]) == len(layers) else list(range(len(stats["mean"])))
+                ax.plot(xs, stats["mean"], marker="o", ms=2.5,
                         label=f"{g} (n={stats['n_pairs']})")
             ax.axhline(0, color="gray", lw=0.5)
             ax.axhline(1, color="gray", lw=0.5, ls="--")
