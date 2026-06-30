@@ -25,8 +25,8 @@ Quickstart (swap `--model-name` for other models):
 ```bash
 python patching/patch_pairs.py --model-name Qwen/Qwen3.5-9B \
   --balance 40 --balance-types 1,2,3 --aligned-only \
-  --out output/patch_pairs/qwen35_9b_aligned.json
-bash scripts/patch_launch_multigpu.sh output/patch_pairs/qwen35_9b_aligned.json output/patch_run/qwen35_9b 4
+  --out results/patching/pairs/qwen35_9b_aligned.json
+bash scripts/patch_launch_multigpu.sh results/patching/pairs/qwen35_9b_aligned.json results/patching/run/qwen35_9b 4
 python patching/patch_components.py --model-name Qwen/Qwen3.5-9B \
-  --pairs output/patch_pairs/qwen35_9b_aligned.json --out output/patch_components/qwen35_9b
+  --pairs results/patching/pairs/qwen35_9b_aligned.json --out results/patching/components/qwen35_9b
 ```

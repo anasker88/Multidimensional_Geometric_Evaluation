@@ -7,15 +7,15 @@
 #
 # Examples:
 #   bash scripts/patch_launch_multigpu.sh   # defaults below
-#   bash scripts/patch_launch_multigpu.sh output/patch_pairs/qwen35_9b_aligned.json output/patch_run/qwen35_9b 4
+#   bash scripts/patch_launch_multigpu.sh results/patching/pairs/qwen35_9b_aligned.json results/patching/run/qwen35_9b 4
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-PAIRS="${1:-output/patch_pairs/qwen35_9b_aligned.json}"
-OUT="${2:-output/patch_run/qwen35_9b}"
+PAIRS="${1:-results/patching/pairs/qwen35_9b_aligned.json}"
+OUT="${2:-results/patching/run/qwen35_9b}"
 NUM_GPUS="${3:-4}"
 
 if [ ! -f "$PAIRS" ]; then

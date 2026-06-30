@@ -74,8 +74,8 @@ denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
 
 **実行結果**(Qwen3.5-9B トークナイザ, simple_prompt, `--balance 40 --balance-types 1,2,3`):
 - (次元 × type)= 各40整列(4D type1のみ実データ43)→ **計 363 整列ペア**、全 A→B。
-- 編集スパンは 1〜2 トークン。出力: `output/patch_pairs/qwen35_9b_aligned.json`。
-- コマンド: `python patching/patch_pairs.py --balance 40 --balance-types 1,2,3 --aligned-only --out output/patch_pairs/qwen35_9b_aligned.json`
+- 編集スパンは 1〜2 トークン。出力: `results/patching/pairs/qwen35_9b_aligned.json`。
+- コマンド: `python patching/patch_pairs.py --balance 40 --balance-types 1,2,3 --aligned-only --out results/patching/pairs/qwen35_9b_aligned.json`
 - type3 注記: collinear/coplanar は line-relationship とは別タスク。次元横断比較は type 内で行う。
 
 ### Phase 1 — 残差ストリーム (層 × 位置) スイープ  ← 実装済
@@ -89,7 +89,7 @@ denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
 - ベースライン選別(clean→A・corrupted→B 両正解、`logit(A)-logit(B)` の符号)をここで実施。
 - 全ペア平均で **層 × 効果** 曲線を (次元 × type) ごとに描画・JSON 出力。
 - 実行: `CUDA_VISIBLE_DEVICES=0 .venv/bin/python patching/patch_run.py
-  --pairs output/patch_pairs/qwen35_9b_aligned.json --positions edit,last --out output/patch_run/qwen35_9b`
+  --pairs results/patching/pairs/qwen35_9b_aligned.json --positions edit,last --out results/patching/run/qwen35_9b`
 - 集計は (次元/type/次元×type/real-vs-synthetic) で分解、type別プロットを出力。
 - **スモーク検証(9ペア)で causal-tracing シグネチャ確認**(denoise, pooled):
   edit位置 = 早期1.0 → L8-14で受け渡し → 後期≈0、last位置 = 早期≈0 → L16-28で上昇、

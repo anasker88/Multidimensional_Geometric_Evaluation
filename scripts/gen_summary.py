@@ -5,7 +5,7 @@ from collections import defaultdict, Counter
 csv.field_size_limit(10**9)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASE = os.environ.get("EVAL_BASE", "results/final_greedy_20260626")
+BASE = os.environ.get("EVAL_BASE", "results/eval/final_greedy_20260626")
 OUT = os.path.join(ROOT, BASE, "summary.md")
 
 # (display, dir = results/<BASE>/<model_safe>, prompt, TP, maxtok)

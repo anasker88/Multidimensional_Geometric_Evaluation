@@ -11,7 +11,7 @@ import csv, os, glob
 csv.field_size_limit(10**7)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASE = os.environ.get("EVAL_BASE", "results/final_greedy_20260626")
+BASE = os.environ.get("EVAL_BASE", "results/eval/final_greedy_20260626")
 SUMMARY = os.path.join(ROOT, BASE, "summary.md")
 
 MODELS = [

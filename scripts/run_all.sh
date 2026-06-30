@@ -40,7 +40,7 @@ run1(){  # gpus model tp mem prompt maxtok [extra args...]
     --models "$model" --dims "$DIMS" \
     --tensor-parallel-size "$tp" --gpu-memory-utilization "$mem" \
     --dtype bfloat16 --max-new-tokens "$maxtok" --prompt-type "$prompt" "$@" \
-    --results-root results --timestamp "$TS" \
+    --results-root results/eval --timestamp "$TS" \
     >>"logs/run_${safe}_${TS}.log" 2>&1
   log "<<< DONE  $model (exit $?)"
 }

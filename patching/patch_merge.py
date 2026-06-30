@@ -3,7 +3,7 @@
 Usage:
     .venv/bin/python patching/patch_merge.py \
         --num-shards 4 \
-        --in-dir output/patch_run/qwen35_9b
+        --in-dir results/patching/run/qwen35_9b
 """
 import argparse
 import json

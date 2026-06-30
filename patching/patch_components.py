@@ -26,13 +26,13 @@ modified). effect-key = '<component>:<direction>:<posmode>', e.g. 'attn:denoise:
 
 Run (single GPU):
     CUDA_VISIBLE_DEVICES=0 .venv/bin/python patching/patch_components.py \
-        --pairs output/patch_pairs/qwen35_9b_aligned.json \
-        --out output/patch_components/qwen35_9b
+        --pairs results/patching/pairs/qwen35_9b_aligned.json \
+        --out results/patching/components/qwen35_9b
 
 Multi-GPU (mirrors patch_run.py; merge with patch_merge.py):
     for i in 0 1 2 3; do CUDA_VISIBLE_DEVICES=$i .venv/bin/python \
         patching/patch_components.py --num-shards 4 --shard-id $i \
-        --out output/patch_components/qwen35_9b & done
+        --out results/patching/components/qwen35_9b & done
 """
 import argparse
 import json
@@ -138,7 +138,7 @@ def process_pair(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--pairs", default="output/patch_pairs/qwen35_9b_aligned.json")
+    ap.add_argument("--pairs", default="results/patching/pairs/qwen35_9b_aligned.json")
     ap.add_argument("--model-name", default="Qwen/Qwen3.5-9B")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--components", default="attn,mlp")
@@ -149,7 +149,7 @@ def main() -> None:
     ap.add_argument("--margin", type=float, default=0.0)
     ap.add_argument("--num-shards", type=int, default=1, help="total GPU shards (multi-GPU)")
     ap.add_argument("--shard-id", type=int, default=0, help="index of this shard [0, num-shards)")
-    ap.add_argument("--out", default="output/patch_components/qwen35_9b")
+    ap.add_argument("--out", default="results/patching/components/qwen35_9b")
     args = ap.parse_args()
 
     components = [c.strip() for c in args.components.split(",") if c.strip()]

@@ -185,7 +185,7 @@ def main() -> None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_slug = args.model_name.replace("/", "_")
         args.output_dir = os.path.join(
-            "output", "recon_eval", f"{ts}_{model_slug}"
+            "results", "sae", "recon_eval", f"{ts}_{model_slug}"
         )
     os.makedirs(args.output_dir, exist_ok=True)
 

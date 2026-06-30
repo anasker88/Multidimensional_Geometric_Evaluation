@@ -27,8 +27,8 @@ Model is loaded once via TransformerBridge (see PATCHING_ROADMAP.md). Run with
 the patching venv:
 
     CUDA_VISIBLE_DEVICES=0 .venv/bin/python patching/patch_run.py \
-        --pairs output/patch_pairs/qwen35_9b_aligned.json \
-        --out output/patch_run/qwen35_9b
+        --pairs results/patching/pairs/qwen35_9b_aligned.json \
+        --out results/patching/run/qwen35_9b
 """
 import argparse
 import json
@@ -255,7 +255,7 @@ def _plot(agg: Dict, layers: List[int], out_dir: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--pairs", default="output/patch_pairs/qwen35_9b_aligned.json")
+    ap.add_argument("--pairs", default="results/patching/pairs/qwen35_9b_aligned.json")
     ap.add_argument("--model-name", default="Qwen/Qwen3.5-9B")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--directions", default="denoise,noise")
@@ -265,7 +265,7 @@ def main() -> None:
     ap.add_argument("--layers", default="all", help="'all' or comma-separated layer indices")
     ap.add_argument("--limit", type=int, default=0, help="process only first N aligned pairs (smoke test)")
     ap.add_argument("--margin", type=float, default=0.0, help="baseline logit-diff margin")
-    ap.add_argument("--out", default="output/patch_run/qwen35_9b")
+    ap.add_argument("--out", default="results/patching/run/qwen35_9b")
     ap.add_argument("--num-shards", type=int, default=1,
                     help="total number of GPU shards (for multi-GPU runs)")
     ap.add_argument("--shard-id", type=int, default=0,

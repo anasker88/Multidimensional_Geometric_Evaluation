@@ -17,7 +17,7 @@ Example:
     python patching/patch_pairs.py \
         --model-name Qwen/Qwen3.5-9B \
         --dims 2,3,4 --prompt-type simple_prompt \
-        --out output/patch_pairs/qwen35_9b.json
+        --out results/patching/pairs/qwen35_9b.json
 """
 import argparse
 import itertools
@@ -442,7 +442,7 @@ def main() -> None:
     ap.add_argument("--balance-types", default="1,2,3",
                     help="option-set types to balance with synthetic pairs: 1=par/perp, "
                          "2=intersect/not, 3=collinear/coplanar (Yes/No).")
-    ap.add_argument("--out", default="output/patch_pairs/pairs.json")
+    ap.add_argument("--out", default="results/patching/pairs/pairs.json")
     ap.add_argument("--aligned-only", action="store_true",
                     help="write only token-aligned pairs (recommended for Phase 1)")
     args = ap.parse_args()

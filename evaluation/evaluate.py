@@ -477,7 +477,7 @@ def _answer_confidence(
 # Global timestamp for all runs in this session (can be overridden by CLI)
 _RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 # Base results directory (can be overridden by CLI)
-RESULTS_ROOT = "results"
+RESULTS_ROOT = "results/eval"
 
 
 def _ensure_dirs(model_name: str) -> Tuple[str, str]:

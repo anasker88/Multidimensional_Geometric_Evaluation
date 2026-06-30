@@ -37,7 +37,7 @@ support landed in TL 3.2). Current working box: 4 × NVIDIA RTX A6000 48GB.
 `max-new-tokens=16` · `temperature=0.1`, `top-p=0.9` · prompt `simple_prompt`
 (Llama-3.3-70B also `simple_prompt_strict`). GPU scheduling: ≤32B → `tensor-parallel-size 1`
 (two models in parallel, one per GPU); 70B-class + `Qwen3.5-35B-A3B` → `tensor-parallel-size 2`,
-sequential. 70B caches (~135 GB each) are deleted after use. Results → `results/<timestamp>/<model_name>/`.
+sequential. 70B caches (~135 GB each) are deleted after use. Results → `results/eval/<timestamp>/<model_name>/`.
 
 ## Repository Structure
 
@@ -89,8 +89,10 @@ Dimensional-geometry activation-patching pipeline (runs under `.venv`). Stages:
 - **`test_baseline_accuracy.py`**, **`test_baseline_by_dimension.py`**, **`test_numeric_debug.py`**, **`test_raw_vs_sae.py`** — Baseline / debugging scripts. They add the CWD to `sys.path`, so **run them from the repository root**.
 
 ### Gitignored Directories
-- **`results/`** — Evaluation outputs (`results/<timestamp>/<model_name>/`).
-- **`output/`** — Generated artifacts: `output/patch_pairs/`, `output/patch_run/`, `output/patch_components/` (patching); `output/validate/`, `output/recon_eval/` (legacy SAE).
+- **`results/`** — All generated outputs, grouped by experiment (mirrors the source layout):
+  - `results/eval/<timestamp>/<model_name>/` — model-evaluation sweeps.
+  - `results/patching/{pairs,run,components}/` — activation-patching artifacts.
+  - `results/sae/{validate,recon_eval}/` — legacy SAE artifacts.
 - **`logs/`**, **`past_results/`**, **`__pycache__/`**, **`.venv/`**, **`sae_activations/`**, **`analysis/`** — logs, archives, build artifacts, virtualenv, generated activations.
 
 ---
@@ -110,7 +112,7 @@ chmod 600 ~/.cache/huggingface/token
 **Prompt types:** the sweep uses `simple_prompt`, except Llama-3.3-70B-Instruct which uses `simple_prompt_strict`. The model list, per-model tensor-parallel size, and prompt types are encoded in `run_all.sh`.
 
 ```bash
-# Full sweep (auto-timestamps results/<TS>/; foreground):
+# Full sweep (auto-timestamps results/eval/<TS>/; foreground):
 bash scripts/run_all.sh
 
 # Detached so it survives SSH disconnect, explicit timestamp:
@@ -158,14 +160,14 @@ Key CLI options:
 ### Output Format
 
 ```
-results/{timestamp}/{model_name}/
+results/eval/{timestamp}/{model_name}/
 ├── results.text                       # Summary stats (per type, incl. numeric & numeric_mc)
 ├── dim_{2,3,4}.log
 ├── dim_{2,3,4}_per_question.csv        # / _correct.csv / _incorrect.csv
 └── confusion_matrix_{2,3,4}d_type_{1,2,3}.png   # PPC/IC/CC confusion matrices
 ```
 
-Confusion matrices are emitted for the multiple-choice types only (PPC/IC/CC); `numeric` and `numeric_mc` are reported as accuracy rows in `results.text`. The cross-model summary is built with `python scripts/gen_summary.py` (→ `results/<base>/summary.md`) and position-bias analysis with `python scripts/gen_bias.py`.
+Confusion matrices are emitted for the multiple-choice types only (PPC/IC/CC); `numeric` and `numeric_mc` are reported as accuracy rows in `results.text`. The cross-model summary is built with `python scripts/gen_summary.py` (→ `results/eval/<base>/summary.md`) and position-bias analysis with `python scripts/gen_bias.py`.
 
 ### Augmenting Questions
 
@@ -210,18 +212,18 @@ conditions are traced.
 # Phase 0 — build token-aligned pairs (dimension × type1/2/3, balanced):
 .venv/bin/python patching/patch_pairs.py \
   --balance 40 --balance-types 1,2,3 --aligned-only \
-  --out output/patch_pairs/qwen35_9b_aligned.json
+  --out results/patching/pairs/qwen35_9b_aligned.json
 
 # Phase 1 — residual-stream (layer × position) sweep, multi-GPU then merge:
-bash scripts/patch_launch_multigpu.sh output/patch_pairs/qwen35_9b_aligned.json output/patch_run/qwen35_9b 4
+bash scripts/patch_launch_multigpu.sh results/patching/pairs/qwen35_9b_aligned.json results/patching/run/qwen35_9b 4
 #   (single GPU: .venv/bin/python patching/patch_run.py --pairs … --out … --positions edit,last)
 
 # Phase 2 — attention (linear-attn) / MLP component patching:
 .venv/bin/python patching/patch_components.py \
-  --pairs output/patch_pairs/qwen35_9b_aligned.json --out output/patch_components/qwen35_9b
+  --pairs results/patching/pairs/qwen35_9b_aligned.json --out results/patching/components/qwen35_9b
 ```
 
-Outputs: `output/patch_*/…/patch_results.json` + per-effect-key plots under `plots/`. Aggregates are
+Outputs: `results/patching/*/…/patch_results.json` + per-effect-key plots under `plots/`. Aggregates are
 broken down by dimension, type, dimension×type, and real-vs-synthetic so circuit invariance can be tested.
 
 **Key findings (Phase 0–1).**
@@ -250,7 +252,7 @@ python sae/validate.py --output-dir sae_activations --model-name google/gemma-2-
 python sae/recon_eval.py --model-name <hf-model> --sae-release <release> --sae-id <id> --dims 3,4
 ```
 
-Outputs go to `output/validate/` and `output/recon_eval/`. See module docstrings / `--help` for the full option set.
+Outputs go to `results/sae/validate/` and `results/sae/recon_eval/`. See module docstrings / `--help` for the full option set.
 
 ---
 
@@ -263,7 +265,6 @@ Outputs go to `output/validate/` and `output/recon_eval/`. See module docstrings
 | `data/*.csv` | ✓ | Source datasets |
 | `scripts/*.py`, `scripts/*.sh` | ✓ | Data generation, evaluation + patching runners, analysis |
 | `tests/*.py` | ✓ | Baseline / debugging scripts |
-| `results/`, `past_results/` | ✗ | Large generated eval outputs / archives; local-only |
-| `output/` | ✗ | Generated patching + SAE artifacts; local-only |
+| `results/` (eval/ · patching/ · sae/), `past_results/` | ✗ | All generated outputs (grouped by experiment) / archives; local-only |
 | `logs/` | ✗ | Runtime logs |
 | `__pycache__/`, `.venv/`, `sae_activations/`, `analysis/` | ✗ | Build artifacts / virtualenv / generated data |

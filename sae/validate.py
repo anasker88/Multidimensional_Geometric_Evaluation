@@ -407,7 +407,7 @@ def main() -> None:
 	)
 	parser.add_argument(
 		"--results-dir",
-		default="output/validate",
+		default="results/sae/validate",
 		help="Directory to save plots and visualization outputs",
 	)
 	parser.add_argument(
