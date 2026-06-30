@@ -43,7 +43,16 @@ PATCH_MODELS = [
  ("Llama-3.1-8B-Instruct",f"{PATCH_BASE_A}/meta-llama_Llama-3.1-8B-Instruct"),
 ]
 PATCH_HEAD = PATCH_MODELS[0][0]
-MODELS = MAIN_MODELS + PATCH_MODELS
+PATCH_BASE_O = "results/eval/patch_candidates_others_20260630"
+PATCH2_MODELS = [
+ ("phi-4",            f"{PATCH_BASE_O}/microsoft_phi-4"),
+ ("gemma-3-12b-it",   f"{PATCH_BASE_O}/google_gemma-3-12b-it"),
+ ("gemma-2-27b-it",   f"{PATCH_BASE_O}/google_gemma-2-27b-it"),
+ ("Nemotron-Nano-8B", f"{PATCH_BASE_O}/nvidia_Llama-3.1-Nemotron-Nano-8B-v1"),
+ ("gpt-oss-20B",      f"{PATCH_BASE_O}/openai_gpt-oss-20b"),
+]
+PATCH2_HEAD = PATCH2_MODELS[0][0]
+MODELS = MAIN_MODELS + PATCH_MODELS + PATCH2_MODELS
 
 
 def li(s):
@@ -101,7 +110,9 @@ L.append("| モデル | A acc/conf | B | C | D | A→C acc差 | A→C conf差 |"
 L.append("|---|---|---|---|---|---|---|")
 for name, _ in MODELS:
     if name == PATCH_HEAD:
-        L.append("| **— patching候補（標準Attn・別バッチeval）—** | | | | | | |")
+        L.append("| **— patching候補 round1（標準Attn・別バッチeval）—** | | | | | | |")
+    if name == PATCH2_HEAD:
+        L.append("| **— patching候補 round2（非Qwen/推論系・別バッチeval）—** | | | | | | |")
     slot, _ch = res[name]
     cells = " | ".join(f"{fa(acc(slot, k))}/{fc(sconf(slot, k))}" for k in "ABCD")
     ad = (acc(slot, "A") - acc(slot, "C")) if acc(slot, "A") is not None and acc(slot, "C") is not None else None
@@ -116,7 +127,9 @@ L.append("| モデル | A conf(n) | B | C | D |")
 L.append("|---|---|---|---|---|")
 for name, _ in MODELS:
     if name == PATCH_HEAD:
-        L.append("| **— patching候補（標準Attn・別バッチeval）—** | | | | |")
+        L.append("| **— patching候補 round1（標準Attn・別バッチeval）—** | | | | |")
+    if name == PATCH2_HEAD:
+        L.append("| **— patching候補 round2（非Qwen/推論系・別バッチeval）—** | | | | |")
     _slot, ch = res[name]
     cells = " | ".join(f"{fc(cconf(ch, k))} ({cnt(ch, k)})" for k in "ABCD")
     L.append(f"| {name} | {cells} |")

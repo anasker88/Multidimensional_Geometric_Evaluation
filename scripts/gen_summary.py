@@ -39,7 +39,20 @@ PATCH_MODELS = [
  ("Llama-3.1-8B-Instruct",f"{PATCH_BASE_A}/meta-llama_Llama-3.1-8B-Instruct","simple_prompt", 1, 16),
 ]
 PATCH_HEAD = PATCH_MODELS[0][0]  # first patch-candidate display name (group divider anchor)
-MODELS = MAIN_MODELS + PATCH_MODELS
+
+# round-2 patching exploration: non-Qwen families + reasoning models (separate batch, same config).
+# Nemotron / gpt-oss are reasoning models — at 16 tokens they leak thinking (high empty%); gpt-oss in
+# particular answers almost nothing in the next-token slot, which is why it is unfit for patching.
+PATCH_BASE_O = "results/eval/patch_candidates_others_20260630"
+PATCH2_MODELS = [
+ ("phi-4",            f"{PATCH_BASE_O}/microsoft_phi-4",                            "simple_prompt", 1, 16),
+ ("gemma-3-12b-it",   f"{PATCH_BASE_O}/google_gemma-3-12b-it",                      "simple_prompt", 1, 16),
+ ("gemma-2-27b-it",   f"{PATCH_BASE_O}/google_gemma-2-27b-it",                      "simple_prompt", 2, 16),
+ ("Nemotron-Nano-8B", f"{PATCH_BASE_O}/nvidia_Llama-3.1-Nemotron-Nano-8B-v1",       "simple_prompt", 1, 16),
+ ("gpt-oss-20B",      f"{PATCH_BASE_O}/openai_gpt-oss-20b",                         "simple_prompt", 1, 16),
+]
+PATCH2_HEAD = PATCH2_MODELS[0][0]
+MODELS = MAIN_MODELS + PATCH_MODELS + PATCH2_MODELS
 TYPES = ["1","2","3","numeric","numeric_mc"]
 TYPELABEL = {"1":"PPC","2":"IC","3":"CC","numeric":"Numeric","numeric_mc":"Numeric-MC"}
 
@@ -131,13 +144,18 @@ for k, v in [("decoding", "greedy (do_sample=False; vLLM temperature=0)"),
              ("max_new_tokens", "16"), ("dims", "2,3,4")]:
     L.append(f"| {k} | {v} |")
 L.append("\n### モデル別の prompt / TP / max_new_tokens\n")
-L.append("上段=本評価の対象ファミリー、下段=**activation-patching 候補**（標準 GQA Attention。"
-         f"`{PATCH_BASE_A}` / `{PATCH_BASE_Q}` で別バッチ評価、設定は同一）。\n")
+L.append("上段=本評価の対象ファミリー。下段=**activation-patching 候補**（別バッチ評価・設定は同一）："
+         f"round1=標準GQA（`{PATCH_BASE_A}` / `{PATCH_BASE_Q}`）、round2=非Qwen/推論系（`{PATCH_BASE_O}`）。"
+         "round2 の Nemotron / gpt-oss は推論モデルで empty% が高い（次トークン回答が痩せる）。"
+         "**gemma-2-27b は TP=2 の vLLM NCCL 初期化に失敗し HF フォールバックで実行**したため conf は空欄"
+         "（acc は有効、A6000 は NVLink 非搭載で PCIe P2P NCCL が不安定）。\n")
 L.append("| モデル | prompt_type | TP | max_new_tokens |")
 L.append("|---|---|---|---|")
 for name, d, p, tp, mt in MODELS:
     if name == PATCH_HEAD:
-        L.append("| **— patching候補（標準Attn・別バッチeval）—** | | | |")
+        L.append("| **— patching候補 round1（標準Attn・別バッチeval）—** | | | |")
+    if name == PATCH2_HEAD:
+        L.append("| **— patching候補 round2（非Qwen/推論系・別バッチeval）—** | | | |")
     L.append(f"| {name} | `{p}` | {tp} | {mt} |")
 
 L.append("\n## 問題種別\n")
@@ -206,7 +224,9 @@ for name, d, _, _, _ in MODELS:
     rank.append((name, per.get("2"), per.get("3"), per.get("4"), 100 * te / tt if tt else None))
 for name, a2, a3, a4, em in rank:  # MODELS order (系列ごと); not score-sorted
     if name == PATCH_HEAD:
-        L.append("| **— patching候補（標準Attn・別バッチeval）—** | | | | |")
+        L.append("| **— patching候補 round1（標準Attn・別バッチeval）—** | | | | |")
+    if name == PATCH2_HEAD:
+        L.append("| **— patching候補 round2（非Qwen/推論系・別バッチeval）—** | | | | |")
     L.append(f"| {name} | {_f(a2)} | {_f(a3)} | {_f(a4)} | {_f(em)} |")
 
 L.append("\n## 信頼度 confidence（モデルが選んだ答えトークンの平均確率）\n")
@@ -215,7 +235,9 @@ L.append("| モデル | 2D Conf | 3D Conf | 4D Conf | Conf✓ | Conf✗ |")
 L.append("|---|---|---|---|---|---|")
 for name, d, _, _, _ in MODELS:
     if name == PATCH_HEAD:
-        L.append("| **— patching候補（標準Attn・別バッチeval）—** | | | | | |")
+        L.append("| **— patching候補 round1（標準Attn・別バッチeval）—** | | | | | |")
+    if name == PATCH2_HEAD:
+        L.append("| **— patching候補 round2（非Qwen/推論系・別バッチeval）—** | | | | | |")
     by = data[name]
     dconf = {dim: conf(overall(by[dim])) for dim in ["2", "3", "4"] if dim in by}
     allo = _new()
@@ -232,7 +254,10 @@ L.append("\n## 次元×種別 詳細（acc% / empty% / conf）\n")
 for name, d, _, _, _ in MODELS:
     by = data[name]
     if name == PATCH_HEAD:
-        L.append("\n---\n\n> **以下は activation-patching 候補モデル**（標準 GQA Attention・別バッチ eval）。\n")
+        L.append("\n---\n\n> **以下は activation-patching 候補 round1**（標準 GQA Attention・別バッチ eval）。\n")
+    if name == PATCH2_HEAD:
+        L.append("\n---\n\n> **以下は activation-patching 候補 round2**（非Qwen/推論系・別バッチ eval。"
+                 "Nemotron / gpt-oss は推論モデルで 16tok 時 empty% が高い＝次トークン回答が痩せる）。\n")
     L.append(f"\n### {name}\n")
     L.append("| Dim | " + " | ".join(TYPELABEL[t] for t in TYPES) + " | Overall |")
     L.append("|---|" + "---|" * (len(TYPES) + 1))
