@@ -1,14 +1,5 @@
 logs
 past_results
-
-# results/: version lightweight artifacts only (summaries, plots, patching JSON).
-# Ignore regenerable raw outputs (per-question CSV, run logs) and the heavy
-# out-of-scope / archive trees.
-results/sae/
-results/_legacy/
-results/**/*.csv
-results/**/*.log
-results/**/*.jsonl
 .DS_Store
 run.sh
 __pycache__
@@ -17,6 +8,5 @@ tmp
 .venv
 scripts/local/
 data/*.csv
-.git-results/
 analysis/
 README.md
