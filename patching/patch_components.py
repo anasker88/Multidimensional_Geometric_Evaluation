@@ -141,6 +141,8 @@ def main() -> None:
     ap.add_argument("--pairs", default="results/patching/pairs/qwen35_9b_aligned.json")
     ap.add_argument("--model-name", default="Qwen/Qwen3.5-9B")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--dtype", default="float32", choices=["float32", "bfloat16", "float16"],
+                    help="model load dtype; use bfloat16 for large models on <=48GB GPUs")
     ap.add_argument("--components", default="attn,mlp")
     ap.add_argument("--directions", default="denoise,noise")
     ap.add_argument("--positions", default="edit,last")
@@ -174,10 +176,11 @@ def main() -> None:
     print(f"Loaded {len(pairs)} aligned pairs"
           + (f" (shard {args.shard_id}/{args.num_shards})" if args.num_shards > 1 else ""))
 
-    print(f"Loading {args.model_name} via TransformerBridge (slow, ~8min)...")
+    print(f"Loading {args.model_name} via TransformerBridge (slow, ~8min), dtype={args.dtype}...")
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     from transformer_lens.model_bridge import TransformerBridge
-    model = TransformerBridge.boot_transformers(args.model_name, device=args.device)
+    model = TransformerBridge.boot_transformers(
+        args.model_name, device=args.device, dtype=getattr(torch, args.dtype))
     model.eval()
 
     hooks_by_comp: Dict[str, str] = {}
