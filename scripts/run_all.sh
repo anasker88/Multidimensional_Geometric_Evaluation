@@ -1,5 +1,5 @@
 #!/bin/bash
-# Full curated sweep: 15 in-scope models on the corrected datasets, with
+# Full curated sweep: 19 in-scope models on the corrected datasets, with
 # per-answer confidence + numeric_mc + empty tracking. Writes to
 # results/<RUN_TS>/<model>/.
 #
@@ -9,8 +9,8 @@
 #
 # Scope: Qwen3-235B-A22B-FP8 (FP8 quant) and gpt-oss-120b (harmony/512tok) are
 # excluded — axis-unstable for cross-model comparison. Families covered:
-# Qwen3.5 (2B/4B/9B/27B/35B-A3B/122B-A10B), Qwen3 (30B-A3B/32B/Next-80B),
-# gemma-4 (E4B/12B/26B-A4B/31B), OLMo-3-7B (Instruct/RL-Zero-Math).
+# Qwen3.5 (2B/4B/9B/27B/35B-A3B/122B-A10B), Qwen3 (8B/14B/30B-A3B/32B/Next-80B),
+# gemma-4 (E4B/12B/26B-A4B/31B), gemma-2-9b-it, phi-4, OLMo-3-7B (Instruct/RL-Zero-Math).
 #
 # Scheduling: 100B-class TP=4 sequential (cache-freed after, run first); mid
 # models TP=2 paired across GPU {0,1}/{2,3}; small models TP=1 one per GPU.
@@ -77,6 +77,13 @@ run1 0 "google/gemma-4-E4B-it"           1 0.85 simple_prompt 16 & A=$!
 run1 1 "allenai/Olmo-3-7B-Instruct"      1 0.85 simple_prompt 16 & B=$!
 run1 2 "allenai/Olmo-3-7B-RL-Zero-Math"  1 0.85 simple_prompt 16 & C=$!
 wait $A; wait $B; wait $C
+
+# ---- Stage D: patching target models (TP=1), one per GPU. ----
+run1 0 "Qwen/Qwen3-8B"        1 0.85 simple_prompt 16 & A=$!
+run1 1 "Qwen/Qwen3-14B"       1 0.85 simple_prompt 16 & B=$!
+run1 2 "google/gemma-2-9b-it" 1 0.85 simple_prompt 16 & C=$!
+run1 3 "microsoft/phi-4"      1 0.85 simple_prompt 16 & D=$!
+wait $A; wait $B; wait $C; wait $D
 
 log "=== RUN COMPLETE ($TS) ==="
 echo "ALL_DONE_MARKER $TS" >> "$ML"
