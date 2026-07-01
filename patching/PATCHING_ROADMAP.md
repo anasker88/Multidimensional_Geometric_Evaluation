@@ -137,6 +137,17 @@ denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
     他の Qwen 特有知見(attn@L0・4D-CC 崩壊)と整合。→ 主張は sufficiency 基準で述べ、necessity は
     ファミリー差として注記(ロードマップの backup/Hydra ガードレール通り)。
 
+### 再実行TODO(データセット多様化 f16a8e7 を反映)  ← 進行中
+コミット f16a8e7 で type1/2 を多ファミリ A/B ペアに多様化(box/prism/円球/推移)し、
+`family` タグ・`--per-family-cap`・`by_family` 集計を追加。これを反映するため:
+- [ ] **全モデル full 再 eval**(`evaluation/evaluate.py`、`data/questions_augmented.csv`)
+  — 新構成(円/球/超球接線・三角柱/四面体プリズム・平行垂直推移)の解答可能性とサマリ整合。
+  patching の baseline filter とは独立(必須ではないが推奨)。gemma-2 の vLLM NCCL 問題は再燃見込み。
+- [ ] **各モデルのペア再 mine**(新データ+family タグ)→ **patch 再実行**(Phase 1–4)。
+  `--per-family-cap N` でプールを均等化、`by_family`/`by_dim_family` で**構成一般性**(box 以外でも
+  同じ mover circuit か)を検証。特に tetra-prism/超球は非標準図形なので baseline 通過率を要確認。
+- 対象5モデル: Qwen3.5-9B / Qwen3-8B / Qwen3-14B / gemma-2-9b-it / phi-4。
+
 ### Phase 5(任意・副軸) — 数値タスクの図形同定/operand 回路
 - 図形名スワップ(square↔cube 等, span patching)で図形クラス/次元表現を局在化。
 - パラメータスワップ(side length 1↔2)で operand 処理回路(Stolfo 型)。
