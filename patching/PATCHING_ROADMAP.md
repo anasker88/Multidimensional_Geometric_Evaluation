@@ -96,12 +96,14 @@ denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
   all位置 = 全層1.0(退化=非情報、サニティ用)。位置分解が正しく機能。
 - 速度: 約30s/ペア(positions=edit,last × directions=denoise,noise × 32層)。363ペアで ~3h。
 
-### Phase 2 — 位置・成分の局在化(確認)
-- **(層 × 位置) ヒートマップ**(causal tracing): resid_post を
-  (a) 編集スパンのみ / (b) 回答位置のみ / (c) 選択肢トークン / (d) 全位置 で別々に patch。
-  「読み取り(編集位置・早期)」と「計算・決定(回答位置・後期)」を分離。
-- 受け渡し層で `attn_out` を patch → query=回答位置・key/value=編集位置の mover head を同定。
-  続いて `mlp_out` を patch して計算が MLP に乗るか確認。
+### Phase 2 — 成分の局在化(attn vs mlp)  ← 完了(5モデル・3ファミリー)
+`patching/patch_components.py`(アーキ横断: `linear_attn.hook_out` / `attn.hook_out` を自動解決)
+- `attn_out` / `mlp_out` を edit/last で patch し、「読み(早期)/決定(後期)」を成分に分解。
+- **クロスファミリ知見**(Qwen3.5-9B・Qwen3-8B・Qwen3-14B・gemma-2-9b・phi-4):
+  - **普遍**: MLP は後期に書く(mlp·last ピーク 0.20–0.36) / 標準GQA は最終位置に late attention mover
+    (attn·last: 8B 0.59・14B 0.51・gemma-2 0.48・phi-4 0.28、hybrid 9B のみ弱い 0.16)。
+  - **Qwen 特有**: 「attn が edit を L0 で読む」(gemma-2/phi-4 は MLP が読む)/「4D-CC 確信崩壊」。
+- **旧 Phase 3(次元間比較)は Phase 1/2 のクロスファミリ検証に吸収**(次元不変性は resid・成分とも確認済)。
 
 ### type 横断分析の妥当性(解釈ガードレール)
 - **比較は妥当・推奨、合算は不可**。ペア内正規化+全ペア A→B 方向統一で type 間でも曲線は
@@ -113,10 +115,27 @@ denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
   後段の A/B 読み出しは 3 type 共通ゆえ後段の一致は自明、差は**中盤層**で見る。
   baseline-ok の n を群ごとに併記。
 
-### Phase 3 — 次元間比較と頑健性
-- 2D/3D/4D の (層×位置) マップを重ね、次元上昇で回路がどう後方/分散化するかを比較。
-- テンプレ/パラフレーズ横断で同層が出るか(=回路主張の根拠)。
-- backup/Hydra 効果を考慮し sufficiency 表現に統一。distribution-bound を注記。
+### Phase 3 — per-head mover 解析(hook_z)  ← 完了(標準GQA 4モデル)
+`patching/patch_heads.py`(各モデル自己完結・1GPU、標準 attention のみ = hook_z 必須)
+- attn·last ピーク層周辺で `blocks.L.attn.hook_z` をヘッド単位に patch(最終位置・denoise)。
+- **結果**: 後期 mover は少数の専門ヘッドが担う(top2 で正 recovery の 27–43%、top5 で 44–76%)。
+  トップ: Qwen3-8B L24 H29/H31、Qwen3-14B L28 H21/L29 H20、gemma-2 L28 H8/L26 H12、phi-4 L22 H28/L23 H1。
+  IOI の name-mover 的スパース性が3ファミリー普遍。gemma-2 最集中・phi-4 最分散。
+
+### Phase 4 — ablation による因果検証  ← 完了(標準GQA 4モデル)
+`patching/patch_ablate.py`(Phase 3 の順位から top-k を読み、clean 実行で zero-ablate)
+- メトリクス: `drop_frac = (ld_clean − ld_ablated)/(ld_clean − ld_corr)`(1.0=corruption を完全再現、
+  負=除去で逆に確信が上がる=backup 過補償)。random-head 対照(同一窓・seed 固定)と peak層全ヘッド上界を併記。
+- **結果(top5 mover ablation)**: Qwen3-8B **+0.20**(rand5 +0.004・55×) / Qwen3-14B **+0.17**(rand5≈0) /
+  phi-4 **+0.12**(54×) / gemma-2 **−0.08**。peak層全体: 8B +0.21・14B −0.07・phi-4 −0.01・gemma-2 −0.24。
+- **知見(Phase 3 を精緻化)**:
+  - **sufficiency(Phase 3 の denoise recovery)はスパース&普遍**(top2 ≈ 27–43%)。
+  - **necessity(Phase 4 の ablation)はファミリー依存・非スパース**: Qwen(8B/14B)は mover が**因果的に必要**
+    (top5 で答えが corrupt 方向、random は無効。ただし top2 では弱く top5 で顕在=必要性は十分性より分散)。
+    **gemma-2 は mover/peak層を消しても崩れない=強い backup/冗長(Hydra)**。phi-4 は中間(部分的必要・拡散)。
+  - **含意**: 「復元すれば少数ヘッドで足りる」≠「除去すると壊れる」。**necessity は Qwen 寄り**で、
+    他の Qwen 特有知見(attn@L0・4D-CC 崩壊)と整合。→ 主張は sufficiency 基準で述べ、necessity は
+    ファミリー差として注記(ロードマップの backup/Hydra ガードレール通り)。
 
 ### Phase 5(任意・副軸) — 数値タスクの図形同定/operand 回路
 - 図形名スワップ(square↔cube 等, span patching)で図形クラス/次元表現を局在化。
@@ -154,10 +173,13 @@ TransformerLens のリリースノートでは新しめのバージョンで Qwe
   32層 / d_model=4096 / d_vocab=248320。`blocks.{L}.hook_resid_post` 発火確認済。
   回答トークン: ` A`=357, ` B`=417(単一トークン)。
 - **注意1**: ロードに ~480s。Phase 1 は1回ロードで全ペア処理する設計。
-- **注意2(Phase 2 に影響)**: 本モデルは(一部層が)**linear attention**(`blocks.{L}.linear_attn.*`,
-  `hook_recurrence_out` 等)。標準 `hook_attn_out` は未解決。**Phase 1 の resid_post は無影響**だが、
-  Phase 2 のヘッド/attention 解析は linear attention 用に再設計が必要。
-- 実行GPU: 4×80GB 空き。bf16 9B は単一GPUで余裕。
+- **注意2(解決済)**: Qwen3.5-9B は(一部層が)**linear/hybrid attention**(`blocks.{L}.linear_attn.*`)で
+  標準 `hook_z`(per-head)が無い。→ Phase 2 は `linear_attn.hook_out`/`attn.hook_out` を自動解決して対応。
+  **per-head(Phase 3)/ablation(Phase 4)は標準 attention 必須**のため標準GQA の Qwen3-8B/14B・gemma-2-9b・phi-4 を追加
+  (選定経緯: `patching/MODEL_SELECTION.md`)。
+- **実行環境の移行**: 現行は 4× **RTX A6000 (48GB)**(旧: A100 80GB)。14B/gemma-2/phi-4 は fp32 で載らず
+  `--dtype bfloat16`(指標は dtype 頑健)。27B は 48GB 単体不可(要 A100 80GB か device_map)。vLLM TP=2 は
+  本環境の NCCL(NVLink 非搭載)で不安定 → 27B eval は HF フォールバック(conf 空欄)。
 
 ## 参考(設計根拠)
 - Heimersheim & Nanda, How to use and interpret activation patching (2024) — denoising 推奨, 解釈の落とし穴
