@@ -21,6 +21,9 @@ def main():
     ap.add_argument("--pairs", required=True)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--dtype", default="float32", choices=["float32", "bfloat16", "float16"])
+    ap.add_argument("--by-source", action="store_true",
+                    help="also break the per-dimension table down by CC construction family "
+                         "(source), to test whether a 4D collapse is construction-specific")
     args = ap.parse_args()
 
     with open(args.pairs, encoding="utf-8") as f:
@@ -36,25 +39,36 @@ def main():
     tok = model.tokenizer
     idA, idB, idC = (_answer_token_id(tok, l) for l in ("A", "B", "C"))
 
+    def _family(src: str) -> str:
+        # synthetic_4d_t3_centroid -> centroid ; questions_augmented -> mined
+        return src.split("_t3_")[-1] if "_t3_" in src else ("mined" if "augmented" in src else src)
+
+    # compute per-example A/B/C once
+    for p in cc:
+        toks = tok(p["clean_prompt"], return_tensors="pt",
+                   add_special_tokens=False)["input_ids"].to(model.cfg.device)
+        with torch.no_grad():
+            last = model(toks)[0, -1, :].float()
+        p["_abc"] = (float(last[idA]), float(last[idB]), float(last[idC]))
+
+    def _row(label, rows):
+        n = len(rows)
+        if not n:
+            return
+        mA = sum(r["_abc"][0] for r in rows) / n
+        mB = sum(r["_abc"][1] for r in rows) / n
+        mC = sum(r["_abc"][2] for r in rows) / n
+        am = "A ✓" if mA == max(mA, mB, mC) else ("B ✗" if mB == max(mA, mB, mC) else "C")
+        print(f"{label:>22} {n:>3} {mA:>7.2f} {mB:>7.2f} {mC:>8.2f} {mA-mB:>+12.2f} {am:>7}")
+
     print(f"\n=== {args.model_name} — true-Yes CC, answer-token logits ===")
-    print(f"{'dim':>3} {'n':>3} {'A=Yes':>7} {'B=No':>7} {'C=Cannot':>8} {'cleanLD(A-B)':>12} {'argmax':>7}")
+    print(f"{'group':>22} {'n':>3} {'A=Yes':>7} {'B=No':>7} {'C=Cannot':>8} {'cleanLD(A-B)':>12} {'argmax':>7}")
     for dim in (2, 3, 4):
         sub = [p for p in cc if p["dimension"] == dim]
-        if not sub:
-            continue
-        sA = sB = sC = sLD = 0.0
-        for p in sub:
-            toks = tok(p["clean_prompt"], return_tensors="pt",
-                       add_special_tokens=False)["input_ids"].to(model.cfg.device)
-            with torch.no_grad():
-                logits = model(toks)
-            last = logits[0, -1, :].float()
-            a, b, c = float(last[idA]), float(last[idB]), float(last[idC])
-            sA += a; sB += b; sC += c; sLD += (a - b)
-        n = len(sub)
-        mA, mB, mC = sA / n, sB / n, sC / n
-        am = "A ✓" if mA == max(mA, mB, mC) else ("B ✗" if mB == max(mA, mB, mC) else "C")
-        print(f"{dim:>3} {n:>3} {mA:>7.2f} {mB:>7.2f} {mC:>8.2f} {sLD/n:>+12.2f} {am:>7}")
+        _row(f"{dim}D (all)", sub)
+        if args.by_source:
+            for fam in sorted({_family(p["source"]) for p in sub}):
+                _row(f"{dim}D · {fam}", [p for p in sub if _family(p["source"]) == fam])
 
 
 if __name__ == "__main__":

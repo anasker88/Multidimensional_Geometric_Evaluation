@@ -35,9 +35,13 @@ import csv
 
 from common.prompting import apply_chat_template, make_prompt_mc, resolve_prompt_key
 
-# A geometric reference label is a short run of uppercase letters: a line (EF),
-# plane (GHI) or 3D-hyperplane (BEHL). The corrupted variant swaps this label.
-_LABEL_RE = re.compile(r"^[A-Z]{2,5}$")
+# A geometric reference label is a short run of uppercase letters: a single
+# vertex (E), a line (EF), plane (GHI) or 3D-hyperplane (BEHL). The corrupted
+# variant swaps this label. Single-letter labels (1) enable query-vertex swaps
+# (e.g. "...A, C, and E collinear" -> "...A, C, and B collinear"), which is how
+# CC (type3) minimal pairs are extracted from the dataset; the boundary checks
+# in _single_span_edit ensure we only match a cleanly-delimited label.
+_LABEL_RE = re.compile(r"^[A-Z]{1,5}$")
 
 
 @dataclass
@@ -69,6 +73,39 @@ class Pair:
     clean_row_index: int
     corrupted_row_index: int
     source: str = "questions_augmented"   # or "synthetic_2d"
+    family: str = "other"                 # construction family (for balancing/stratified analysis)
+
+
+# Construction families, matched against the clean question text. Ordered: the
+# first matching pattern wins. Used to balance/stratify the box-dominated pool
+# (a tesseract has many edge/face queries, so box vastly outnumbers the rest).
+_FAMILY_PATTERNS = [
+    ("box", r"tesseract|rectangular solid|rectangle"),
+    ("prism", r"triangular prism|tetrahedral prism"),
+    ("circle/sphere", r"circle|sphere"),
+    ("regular-tetra", r"regular tetrahedron"),
+    ("simplex/tetra", r"5-cell|simplex|tetrahedron|triangular pyramid|pyramid"),
+    ("equilateral/isosceles", r"equilateral|isosceles|AB ?= ?AC"),
+    ("perp-bisector", r"perpendicular bisector|perpendicular to"),
+    ("altitude", r"altitude"),
+    ("midpoint", r"midpoint"),
+    ("centroid/center", r"centroid|innercenter|circumcenter|orthocenter|reflection"),
+    ("intersect", r"intersect"),
+    ("same-space", r"same \d|same plane|same space"),
+    ("tangent", r"tangent"),
+    ("diameter/chord", r"diameter|chord"),
+]
+
+
+def _classify_family(question: str) -> str:
+    # transitivity family: label-agnostic (augmentation relabels the line names),
+    # detected by its two "parallel to line" clauses plus a "perpendicular to line"
+    if question.count("is parallel to line") >= 2 and "is perpendicular to line" in question:
+        return "transitivity"
+    for name, pat in _FAMILY_PATTERNS:
+        if re.search(pat, question, re.I):
+            return name
+    return "other"
 
 
 def _read_rows(csv_path: str, dims: List[int]) -> List[QRow]:
@@ -232,6 +269,7 @@ def build_pairs(
                         token_aligned=token_aligned,
                         clean_row_index=clean.row_index,
                         corrupted_row_index=corr.row_index,
+                        family=_classify_family(clean.question),
                     )
                 )
     return pairs
@@ -325,6 +363,7 @@ def build_synthetic_pairs(
             edit_token_start=es, edit_token_end=ee, n_tokens=nt,
             token_aligned=True, clean_row_index=-1, corrupted_row_index=-1,
             source=f"synthetic_{dim}d_t{type_key}",
+            family=_classify_family(clean_q),
         ))
     return pairs
 
@@ -334,29 +373,49 @@ def build_synthetic_pairs(
 _TYPE3_DIM = {2: 4, 3: 5, 4: 6}
 
 
-def _type3_questions(dim: int, vs: Tuple[str, ...]) -> Tuple[str, str, str, str]:
-    """Return (clean_q, corr_q, clean_edit, corr_edit) for the collinear/coplanar
+# Alternative CC constructions per dimension. Every listed center lies in the
+# affine hull (flat) of the vertices in its construction argument, so the ground
+# truth (collinear/coplanar/cohyperplanar) is preserved — only the phrasing of
+# the construction changes. This lets us test whether the 4D-CC collapse is
+# specific to a single construction (innercenter) or general.
+#   - 2D (segment): midpoint, reflection — both put the point on line AC.
+#   - 3D (triangle face) / 4D (tetra cell): centroid / circumcenter / incenter
+#     (=innercenter) are always in the face's flat; orthocenter is in-plane for a
+#     TRIANGLE (3D) but not guaranteed for a tetrahedron (4D) → 3D-only.
+_TYPE3_CENTERS = {
+    2: ["midpoint", "reflection"],
+    3: ["innercenter", "centroid", "circumcenter", "orthocenter"],
+    4: ["innercenter", "centroid", "circumcenter"],
+}
+
+
+def _type3_questions(dim: int, vs: Tuple[str, ...], center: str) -> Tuple[str, str, str, str]:
+    """Return (clean_q, corr_q, clean_edit, corr_edit) for a collinear/coplanar
     construction. The constructed point lies in the flat spanned by the queried
     original vertices in `clean` (answer Yes/A) but not in `corr` (answer No/B);
-    only the construction's argument label is edited.
-    """
+    only the construction's argument (first vertex) is edited. `center` selects
+    the construction family (see _TYPE3_CENTERS)."""
     if dim == 2:
         a, b, c, e = vs
         q = "Are points {a}, {c}, and {e} collinear?".format(a=a, c=c, e=e)
-        base = "In triangle {a}{b}{c}, point {e} is the midpoint of ".format(a=a, b=b, c=c, e=e)
-        clean_edit, corr_edit = f"{a}{c}", f"{b}{c}"
+        if center == "reflection":
+            base = "In triangle {a}{b}{c}, point {e} is the reflection of ".format(a=a, b=b, c=c, e=e)
+            clean_edit, corr_edit = f"{a} across {c}", f"{b} across {c}"
+        else:  # midpoint
+            base = "In triangle {a}{b}{c}, point {e} is the midpoint of ".format(a=a, b=b, c=c, e=e)
+            clean_edit, corr_edit = f"{a}{c}", f"{b}{c}"
         return base + clean_edit + ". " + q, base + corr_edit + ". " + q, clean_edit, corr_edit
     if dim == 3:
         a, b, c, d, e = vs
         q = "Are points {a}, {c}, {d} and {e} coplanar?".format(a=a, c=c, d=d, e=e)
-        base = "In triangular pyramid {a}{b}{c}{d}, point {e} is the innercenter of ".format(
-            a=a, b=b, c=c, d=d, e=e)
+        base = "In triangular pyramid {a}{b}{c}{d}, point {e} is the {center} of ".format(
+            a=a, b=b, c=c, d=d, e=e, center=center)
         clean_edit, corr_edit = f"{a}{c}{d}", f"{b}{c}{d}"
         return base + clean_edit + ". " + q, base + corr_edit + ". " + q, clean_edit, corr_edit
     a, b, c, d, e, f = vs
     q = "Are points {a}, {c}, {d}, {e} and {f} cohyperplanar?".format(a=a, c=c, d=d, e=e, f=f)
-    base = "In 4-simplex {a}{b}{c}{d}{e}, point {f} is the innercenter of ".format(
-        a=a, b=b, c=c, d=d, e=e, f=f)
+    base = "In 4-simplex {a}{b}{c}{d}{e}, point {f} is the {center} of ".format(
+        a=a, b=b, c=c, d=d, e=e, f=f, center=center)
     clean_edit, corr_edit = f"{a}{c}{d}{e}", f"{b}{c}{d}{e}"
     return base + clean_edit + ". " + q, base + corr_edit + ". " + q, clean_edit, corr_edit
 
@@ -370,44 +429,60 @@ def build_synthetic_type3_pairs(
     max_edit_tokens: int,
     exclude_keys: set,
     letters: str = string.ascii_uppercase,
+    constructions: Optional[List[str]] = None,
 ) -> List[Pair]:
     """Generate up to `n` token-aligned type3 (Yes/No) minimal pairs.
 
-    clean (Yes/A): the constructed point (midpoint in 2D, innercenter in 3D/4D)
-    lies in the flat spanned by the queried vertices -> collinear/coplanar/
-    cohyperplanar. corrupt (No/B): swap one vertex of the construction's argument
-    so the point leaves that flat. Only that argument label is edited.
+    clean (Yes/A): the constructed point lies in the flat spanned by the queried
+    vertices -> collinear/coplanar/cohyperplanar. corrupt (No/B): swap one vertex
+    of the construction's argument so the point leaves that flat.
+
+    `constructions` selects the CC construction families (see _TYPE3_CENTERS);
+    default = the first (original: midpoint / innercenter). The quota `n` is split
+    round-robin across the requested constructions so the pool is balanced, and
+    each pair's `source` records its construction (synthetic_{d}d_t3_{center}).
     """
     if tokenizer is None or n <= 0 or dim not in _TYPE3_DIM:
         return []
+    centers = constructions or [_TYPE3_CENTERS[dim][0]]
+    centers = [c for c in centers if c in _TYPE3_CENTERS[dim]]
+    if not centers:
+        return []
     n_letters = _TYPE3_DIM[dim]
+    per = {c: 0 for c in centers}
+    cap = -(-n // len(centers))  # ceil: per-construction quota for balance
     pairs: List[Pair] = []
     seen = set(exclude_keys)
     for vs in itertools.permutations(letters, n_letters):
         if len(pairs) >= n:
             break
-        clean_q, corr_q, clean_edit, corr_edit = _type3_questions(dim, vs)
-        clean_prompt = apply_chat_template(
-            make_prompt_mc(clean_q, "3", reasoning=prompt_key, rotation=0), model_name)
-        corr_prompt = apply_chat_template(
-            make_prompt_mc(corr_q, "3", reasoning=prompt_key, rotation=0), model_name)
-        key = (clean_prompt, corr_prompt)
-        if key in seen:
-            continue
-        aligned = _token_align(tokenizer, clean_prompt, corr_prompt, max_edit_tokens)
-        if aligned is None:
-            continue
-        seen.add(key)
-        es, ee, nt = aligned
-        pairs.append(Pair(
-            dimension=dim, type_key="3", clean_answer="A", corrupted_answer="B",
-            clean_question=clean_q, corrupted_question=corr_q,
-            clean_edit=clean_edit, corrupted_edit=corr_edit,
-            clean_prompt=clean_prompt, corrupted_prompt=corr_prompt,
-            edit_token_start=es, edit_token_end=ee, n_tokens=nt,
-            token_aligned=True, clean_row_index=-1, corrupted_row_index=-1,
-            source=f"synthetic_{dim}d_t3",
-        ))
+        for center in centers:
+            if len(pairs) >= n or per[center] >= cap:
+                continue
+            clean_q, corr_q, clean_edit, corr_edit = _type3_questions(dim, vs, center)
+            clean_prompt = apply_chat_template(
+                make_prompt_mc(clean_q, "3", reasoning=prompt_key, rotation=0), model_name)
+            corr_prompt = apply_chat_template(
+                make_prompt_mc(corr_q, "3", reasoning=prompt_key, rotation=0), model_name)
+            key = (clean_prompt, corr_prompt)
+            if key in seen:
+                continue
+            aligned = _token_align(tokenizer, clean_prompt, corr_prompt, max_edit_tokens)
+            if aligned is None:
+                continue
+            seen.add(key)
+            es, ee, nt = aligned
+            per[center] += 1
+            pairs.append(Pair(
+                dimension=dim, type_key="3", clean_answer="A", corrupted_answer="B",
+                clean_question=clean_q, corrupted_question=corr_q,
+                clean_edit=clean_edit, corrupted_edit=corr_edit,
+                clean_prompt=clean_prompt, corrupted_prompt=corr_prompt,
+                edit_token_start=es, edit_token_end=ee, n_tokens=nt,
+                token_aligned=True, clean_row_index=-1, corrupted_row_index=-1,
+                source=f"synthetic_{dim}d_t3_{center}",
+                family=_classify_family(clean_q),
+            ))
     return pairs
 
 
@@ -442,6 +517,11 @@ def main() -> None:
     ap.add_argument("--balance-types", default="1,2,3",
                     help="option-set types to balance with synthetic pairs: 1=par/perp, "
                          "2=intersect/not, 3=collinear/coplanar (Yes/No).")
+    ap.add_argument("--type3-constructions", default="",
+                    help="comma-separated CC construction families to diversify type3 over "
+                         "(2D: midpoint,reflection; 3D: innercenter,centroid,circumcenter,orthocenter; "
+                         "4D: innercenter,centroid,circumcenter). Empty = original single "
+                         "(midpoint/innercenter). The per-cell quota is split across them.")
     ap.add_argument("--out", default="results/patching/pairs/pairs.json")
     ap.add_argument("--aligned-only", action="store_true",
                     help="write only token-aligned pairs (recommended for Phase 1)")
@@ -467,9 +547,10 @@ def main() -> None:
                 if need <= 0:
                     continue
                 if type_key == "3":
+                    t3c = [c.strip() for c in args.type3_constructions.split(",") if c.strip()]
                     syn = build_synthetic_type3_pairs(
                         dim, need, prompt_key, args.model_name, tokenizer,
-                        args.max_edit_tokens, existing_keys)
+                        args.max_edit_tokens, existing_keys, constructions=t3c or None)
                 else:
                     syn = build_synthetic_pairs(
                         dim, need, prompt_key, args.model_name, tokenizer,

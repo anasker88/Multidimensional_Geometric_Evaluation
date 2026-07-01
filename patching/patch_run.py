@@ -137,7 +137,8 @@ def process_pair(
     if not correct or abs(denom) < 1e-6:
         return {
             "dimension": pair["dimension"], "type_key": pair["type_key"],
-            "source": pair["source"], "ld_clean": ld_clean, "ld_corr": ld_corr,
+            "source": pair["source"], "family": pair.get("family", "other"),
+            "ld_clean": ld_clean, "ld_corr": ld_corr,
             "baseline_ok": False, "effects": {},
         }
 
@@ -164,7 +165,8 @@ def process_pair(
 
     return {
         "dimension": pair["dimension"], "type_key": pair["type_key"],
-        "source": pair["source"], "ld_clean": ld_clean, "ld_corr": ld_corr,
+        "source": pair["source"], "family": pair.get("family", "other"),
+        "ld_clean": ld_clean, "ld_corr": ld_corr,
         "baseline_ok": True, "effects": effects,
     }
 
@@ -185,6 +187,8 @@ _GROUPINGS = {
     "by_type": lambda r: f"t{r['type_key']}",
     "by_dim_type": lambda r: f"{r['dimension']}D_t{r['type_key']}",
     "by_kind": _kind,
+    "by_family": lambda r: r.get("family", "other"),
+    "by_dim_family": lambda r: f"{r['dimension']}D_{r.get('family', 'other')}",
 }
 
 
@@ -266,6 +270,9 @@ def main() -> None:
                          "(degenerate sanity check). comma-separated.")
     ap.add_argument("--layers", default="all", help="'all' or comma-separated layer indices")
     ap.add_argument("--limit", type=int, default=0, help="process only first N aligned pairs (smoke test)")
+    ap.add_argument("--per-family-cap", type=int, default=0,
+                    help="cap each (dimension, family) group to at most N pairs before running, so "
+                         "the box-dominated pool is balanced across construction families (0=off)")
     ap.add_argument("--margin", type=float, default=0.0, help="baseline logit-diff margin")
     ap.add_argument("--out", default="results/patching/run/qwen35_9b")
     ap.add_argument("--num-shards", type=int, default=1,
@@ -280,6 +287,18 @@ def main() -> None:
     with open(args.pairs, "r", encoding="utf-8") as f:
         data = json.load(f)
     pairs = [p for p in data["pairs"] if p.get("token_aligned")]
+    if args.per_family_cap > 0:
+        # balance the box-dominated pool: keep at most N pairs per (dim, family)
+        per_fam: Dict[tuple, int] = defaultdict(int)
+        sel = []
+        for p in pairs:
+            key = (p["dimension"], p.get("family", "other"))
+            if per_fam[key] < args.per_family_cap:
+                sel.append(p)
+                per_fam[key] += 1
+        print(f"per-family-cap={args.per_family_cap}: {len(pairs)} -> {len(sel)} pairs "
+              f"across {len(per_fam)} (dim,family) groups")
+        pairs = sel
     if args.limit > 0:
         # keep a balanced slice across dimensions for smoke tests
         per_dim: Dict[int, int] = defaultdict(int)
