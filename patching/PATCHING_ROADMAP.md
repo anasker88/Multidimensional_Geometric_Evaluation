@@ -1,21 +1,24 @@
-# Activation Patching ロードマップ — 次元別・層ごとの幾何推論回路調査
+# Activation Patching ロードマップ — 次元別・構成別の幾何推論回路調査
 
-最終更新: 2026-06-29
+最終更新: 2026-07-02
+状態: **Phase 0–5 完了**(6モデル・3ファミリー、データセット多様化済み)。
+残タスク: 全モデル full 再eval / gemma-2-9b backup 解明(任意) / 数値タスク operand 回路(任意・副軸)。
 
 ## 0. 目的と科学的問い
 
 「Multidimensional Geometric Evaluation」の中核は **2D→3D→4D で精度が劣化する**こと
-(summary: 2D≈88–93% → 4D≈56–77%)。本実験はその背後の計算機構を
-activation patching で因果的に調べる。
+(summary: 2D≈88–93% → 4D≈56–77%)。本実験はその背後の計算機構を activation patching で因果的に調べる。
 
-主問い: **同じ関係推論が、次元(2D/3D/4D)ごとに、どの層・どのトークン位置で
-行われているか。次元が上がると回路はどう変質するか。**
+主問い:
+1. **次元**: 同じ関係推論が 2D/3D/4D でどの層・どの位置で行われ、次元が上がると回路はどう変質するか。
+2. **構成**: その回路は幾何構成(箱/円/角柱/…)に依存するか、それとも構成非依存か(Phase 5)。
+3. **普遍性**: 知見はモデル/ファミリーを超えて普遍か、特定モデル固有か(3ファミリー・6モデルで検証)。
 
 ## 1. 設計の確定事項
 
 ### 主軸: MC・次元内・線参照スワップ
-clean と corrupted は **同一次元内**で、幾何参照(線/面/超平面のラベル)を
-1スパンだけ入れ替え、**答えが反転(A↔B)**するペアにする。
+clean と corrupted は **同一次元内**で、幾何参照(線/面/超平面のラベル)を1スパンだけ入れ替え、
+**答えが反転(A↔B)**するペアにする。
 
 ```
 clean:     In rectangle ABEF, AB=5. ... relationship between line AB and line EF?  → AB‖EF = Parallel (A)
@@ -23,31 +26,46 @@ corrupted: In rectangle ABEF, AB=5. ... relationship between line AB and line BE
 ```
 - 編集は末尾ラベル `EF`→`BE` の単一スパンのみ(それ以外は完全一致)。
 - 2D/3D/4D の各列で同型のペアを作れる → 次元間で回路を比較できる。
-- データ上、clean/corrupted は `questions_augmented.csv` の type=A 行 / type=B 行に
-  対応(例: 行2 と 行26)。ペアは**メタデータではなく文字列の最小差分で自動検出**する。
+- ペアは**メタデータではなく文字列の最小差分で自動検出**(`patch_pairs.build_pairs`)。
 
 ### なぜ「図形名スワップ」をMCで使わないか
-MC関係問題の答えは図形トポロジーに依存し、図形名(rectangle)だけ替えると
-頂点ラベル構造が壊れて問題が成立しない。図形名のみで答えが変わるのは
-**数値タスク**(例: vertices in a square=4 → cube=8)で、これは次元をまたぐため
-副軸として別扱い(将来 Phase 5 で operand/図形同定回路の調査に使う)。
+MC関係問題の答えは図形トポロジーに依存し、図形名(rectangle)だけ替えると頂点ラベル構造が壊れて
+問題が成立しない。図形名のみで答えが変わるのは**数値タスク**(square=4→cube=8)で、次元をまたぐため
+副軸として別扱い(Phase 7)。
+
+### 構成の多様化と A/B 統一(commit f16a8e7) ← Phase 5 の基盤
+当初 type1/2(PPC/IC)は**箱系の単一構成**(rectangle→cuboid→tesseract)に偏っていた。構成一般性を
+検証するため、以下を追加し**全 minimal-pair を A/B に統一**、各ペアに構成 **family タグ**を付与:
+- **type1/2 に追加**: 円/球/超球(接線＋平行直径)、正三角柱/四面体プリズム、平行垂直の推移
+  (CD∥AB・EF∥CD・GH⊥CD → AB&EF=∥ / AB&GH=⊥、EF↔GH の1スパン反転)。
+- **type3(CC)**: `_LABEL_RE {2,5}→{1,5}` 修正で頂点1文字 swap のデータセット抽出を解禁
+  (従来は合成 midpoint/innercenter のみに退化していた)。接線/交差/中点/垂線/等脚 等が mine される。
+- **重要な仕様**: patching は実質 **A/B 対比のみ**を使う(合成 builder は clean=A/corr=B 固定、
+  C=「どちらでもない」/D=「不能」は保持が弱く baseline filter で落ちる)。よって追加構成は全て
+  「平行 vs 垂直 / 交差 vs 非交差」の A/B を1図形から出すよう設計。
+- **均等化**: `family` タグ + `patch_run --per-family-cap N`(各 (次元,family) を N 件に間引き) +
+  集計軸 `by_family`/`by_dim_family` で、box 優位のプールでも構成別に circuit を比較可能。
 
 ### 確定パラメータ
 | 項目 | 値 | 理由 |
 |---|---|---|
-| 対象モデル | Qwen3.5-9B(評価セット中で最小の密モデル) | MoE/gpt-oss は patching に不利。次元劣化が明確(2D84/4D56)。 |
-| バックエンド | TransformerLens / TransformerBridge(`recon_eval.py` と同経路) | フックで resid/attn/mlp に介入。**SAEは不使用**。 |
-| プロンプト形式 | `simple_prompt`(assistant prefill 直後に回答レター) | 回答が次トークン → 1 forward で logit 取得、生成不要。 |
-| rotation | **0 に固定** | ペア内の差分を線スワップ1点に限定(rotationは交絡)。A=Parallel,B=Perp が不変。 |
-| メトリクス | `logit(clean_ans) − logit(corr_ans)` を主、確率・正解率を従 | 連続・線形で段階的効果が見える(Zhang & Nanda)。 |
-| patch 方向 | denoising 主(corrupted に clean を注入)/ noising 従 | denoising の方が局在しやすい(Heimersheim & Nanda)。 |
-| デコード | greedy, **repetition_penalty=1.0** | memory: rep=1.1 が MC primacy aversion を誘発。 |
+| 対象モデル | **6モデル・3ファミリー**(下記) | 普遍性の切り分け。標準GQA=per-head/ablation 可能。 |
+| バックエンド | TransformerLens / TransformerBridge(`boot_transformers`) | resid/attn/mlp/hook_z にフック。SAE 不使用。 |
+| プロンプト形式 | `simple_prompt`(assistant prefill 直後に回答レター) | 回答が次トークン → 1 forward、生成不要。 |
+| rotation | **0 固定** | ペア内差分を線スワップ1点に限定(rotation は交絡)。 |
+| メトリクス | `logit(clean_ans) − logit(corr_ans)` 主 | 連続・線形で段階効果(Zhang & Nanda)。 |
+| patch 方向 | denoising 主 / noising 従 | denoising が局在しやすい(Heimersheim & Nanda)。 |
+| デコード | greedy, **repetition_penalty=1.0** | rep=1.1 は MC primacy aversion を誘発(memory)。 |
+
+**対象6モデル**: Qwen3.5-9B(Qwen・hybrid) / Qwen3-8B(Qwen・GQA) / Qwen3-14B(Qwen・GQA) /
+gemma-2-9b-it(Google・GQA) / **gemma-2-27b-it(Google・GQA)** / phi-4(Microsoft・GQA)。
+選定経緯: `patching/MODEL_SELECTION.md`。
 
 ### 不変条件(patching 成立の前提)
-1. **トークン整列**: clean/corrupted は同じトークン長で、編集スパン以外の全位置が一致。
-   → スワップ部のトークン長が一致するペアのみ採用(Phase 0 でフィルタ)。
-2. **ベースライン選別**: clean→正解 かつ corrupted→正解 の**両方を当てている**
-   ペアのみ採用。両条件が分離していないと正規化メトリクスの分母≈0で破綻。
+1. **トークン整列**: clean/corrupted は同じトークン長、編集スパン以外全一致(モデル毎に整列判定 →
+   整列ペア数はトークナイザ依存で 335〜425 と変動=設計通り)。
+2. **ベースライン選別**: clean→正解 かつ corrupted→正解 の両方を当てるペアのみ採用
+   (`ld_clean>margin かつ ld_corr<−margin`)。分母≈0 の破綻を回避。
 
 ### メトリクス正規化
 ```
@@ -55,146 +73,128 @@ effect = (logitdiff_patched − logitdiff_corrupted) / (logitdiff_clean − logi
 ```
 denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
 
-## 2. フェーズ計画
+## 2. フェーズ計画(実施状況)
 
-### Phase 0 — ペア構築とトークン整列  ← 完了
+### Phase 0 — ペア構築・多様化・トークン整列  ← 完了
 `patching/patch_pairs.py`
-- `questions_augmented.csv` から次元内・同type・答え反転・単一スパン編集のペアを自動抽出。
-- 対象モデルのトークナイザで、編集スパンのトークン長一致と整列を検証・フィルタ。
-- **2D/3D の偶然一致不足対策**: `--balance N` で各次元をベンチ同一テンプレの**合成ペア**
-  (rectangle / rectangular solid / tesseract、対辺=平行A↔隣辺=垂直B、トークン整列保証)で N までトップアップ。
-- 出力 JSON: clean/corrupted プロンプト(chat 整形済)、正解レター、編集トークン位置 [start,end)、次元、type、出所(`questions_augmented` / `synthetic_{d}d`)。
+- `questions_augmented.csv`(多様化済 804行相当)から次元内・同type・答え反転・単一スパン編集のペアを自動抽出。
+- 各構成に **family タグ**を付与(`_classify_family`: box / prism / circle·sphere / transitivity /
+  simplex·tetra / intersect / midpoint / isosceles·equilateral / altitude / …)。
+- **各モデルのトークナイザで再 mine**(`--dims 2,3,4 --prompt-type simple_prompt`、合成 top-up=なし)。
+  整列ペア: Qwen3.5-9B 342 / Qwen3-8B 335 / Qwen3-14B 335 / gemma-2-9b 389 / gemma-2-27b 425 / phi-4 335。
+  **全ペア A/B**。出力: `results/patching/pairs/{model}_aligned.json`。
 
-**option-set type の網羅**: 抽出ペアは type1/2 が中心、type3 は実データに単一ラベル編集の
-最小ペアが存在しない(各構成が単一の答えに固定)。`--balance-types 1,2,3` で各 type を合成補完:
-- **type1**(平行/垂直): rectangle/solid/tesseract、対辺=平行A↔隣辺=垂直B。
-- **type2**(交差/非交差): 同一幾何で option set だけ差し替え、隣辺=交差A↔対辺=非交差B。
-- **type3**(共線/共面, Yes/No): 構成点(2D=midpoint, 3D/4D=innercenter)が問う平面上にあれば
-  Yes(A)、外れれば No(B)。編集は構成対象ラベル1スパン(AC→BC / ACD→BCD / ACDE→BCDE)。
-
-**実行結果**(Qwen3.5-9B トークナイザ, simple_prompt, `--balance 40 --balance-types 1,2,3`):
-- (次元 × type)= 各40整列(4D type1のみ実データ43)→ **計 363 整列ペア**、全 A→B。
-- 編集スパンは 1〜2 トークン。出力: `results/patching/pairs/qwen35_9b_aligned.json`。
-- コマンド: `python patching/patch_pairs.py --balance 40 --balance-types 1,2,3 --aligned-only --out results/patching/pairs/qwen35_9b_aligned.json`
-- type3 注記: collinear/coplanar は line-relationship とは別タスク。次元横断比較は type 内で行う。
-
-### Phase 1 — 残差ストリーム (層 × 位置) スイープ  ← 実装済
+### Phase 1 — 残差ストリーム (層 × 位置) スイープ  ← 完了(6モデル)
 `patching/patch_run.py`
-- clean を `run_with_cache`、corrupted のキャッシュを取得。各層 L の `blocks.L.hook_resid_post` を
-  **特定位置だけ** patch → 最終位置の logit-diff を記録。denoise/noise 両方向。
-- **重要な修正**: 当初の「全位置 patch」は **degenerate**(resid_post 全位置は完全な状態なので
-  下流は donor で完全に決まり、正規化効果は全層で 1.0 になり局在不能)。スモークテストで確認。
-  → 位置を限定: `--positions edit,last`(`edit`=編集ラベルのトークンスパン、`last`=回答位置)。
-  これは causal tracing の (層 × 位置) 分解そのもの。`all` は degenerate 確認用に残す。
-- ベースライン選別(clean→A・corrupted→B 両正解、`logit(A)-logit(B)` の符号)をここで実施。
-- 全ペア平均で **層 × 効果** 曲線を (次元 × type) ごとに描画・JSON 出力。
-- 実行: `CUDA_VISIBLE_DEVICES=0 .venv/bin/python patching/patch_run.py
-  --pairs results/patching/pairs/qwen35_9b_aligned.json --positions edit,last --out results/patching/run/qwen35_9b`
-- 集計は (次元/type/次元×type/real-vs-synthetic) で分解、type別プロットを出力。
-- **スモーク検証(9ペア)で causal-tracing シグネチャ確認**(denoise, pooled):
-  edit位置 = 早期1.0 → L8-14で受け渡し → 後期≈0、last位置 = 早期≈0 → L16-28で上昇、
-  all位置 = 全層1.0(退化=非情報、サニティ用)。位置分解が正しく機能。
-- 速度: 約30s/ペア(positions=edit,last × directions=denoise,noise × 32層)。363ペアで ~3h。
+- 各層 `blocks.L.hook_resid_post` を **特定位置だけ** patch(`--positions edit,last`)→ 最終位置の
+  logit-diff 回復を記録。denoise/noise 両方向。`all` は degenerate(全層 1.0)確認用。
+- 集計軸: `by_dim` / `by_type` / `by_dim_type` / `by_kind`(real/synthetic) / **`by_family`** / **`by_dim_family`**。
+- **普遍知見**: モデルが解けるペアでは **編集は早期に読まれ(edit ハンドオフ L8–L19)、答えは後期に
+  最終位置で組み立てられる(decision rise)**。次元不変・6モデル普遍(深いモデルほど絶対層が後ろへ)。
+- 実行(例): `CUDA_VISIBLE_DEVICES=0 .venv/bin/python -m patching.patch_run
+  --pairs results/patching/pairs/qwen3_8b_aligned.json --positions edit,last --out results/patching/run/qwen3_8b`
+  (14B/gemma/phi4 は `--dtype bfloat16`)。速度 ~15–30s/ペア。
 
-### Phase 2 — 成分の局在化(attn vs mlp)  ← 完了(5モデル・3ファミリー)
-`patching/patch_components.py`(アーキ横断: `linear_attn.hook_out` / `attn.hook_out` を自動解決)
-- `attn_out` / `mlp_out` を edit/last で patch し、「読み(早期)/決定(後期)」を成分に分解。
-- **クロスファミリ知見**(Qwen3.5-9B・Qwen3-8B・Qwen3-14B・gemma-2-9b・phi-4):
-  - **普遍**: MLP は後期に書く(mlp·last ピーク 0.20–0.36) / 標準GQA は最終位置に late attention mover
-    (attn·last: 8B 0.59・14B 0.51・gemma-2 0.48・phi-4 0.28、hybrid 9B のみ弱い 0.16)。
-  - **Qwen 特有**: 「attn が edit を L0 で読む」(gemma-2/phi-4 は MLP が読む)/「4D-CC 確信崩壊」。
-- **旧 Phase 3(次元間比較)は Phase 1/2 のクロスファミリ検証に吸収**(次元不変性は resid・成分とも確認済)。
-
-### type 横断分析の妥当性(解釈ガードレール)
-- **比較は妥当・推奨、合算は不可**。ペア内正規化+全ペア A→B 方向統一で type 間でも曲線は
-  比較可能。type1(方向)/type2(接続)/type3(アフィン従属)は別タスクなので「次元局在が
-  タスク共有か固有か」を**並べて比較**する価値がある。一方 3 type を**プールした単一平均**は
-  異機構を混ぜるため主結果にしない(`all` は粗サマリ)。
-- **第一単位 = type 固定 × 次元比較**(`by_dim_type`)。**第二 = type 間比較**(`by_type`)。
-- 交絡注意: 編集位置が type で違う(type3 は文中)→ type 間比較は `last` 位置を主に。
-  後段の A/B 読み出しは 3 type 共通ゆえ後段の一致は自明、差は**中盤層**で見る。
+#### type 横断分析のガードレール
+- **比較は妥当・推奨、合算は不可**。type1(方向)/type2(接続)/type3(アフィン従属)は別タスク。
+  第一単位 = `by_dim_type`、第二 = `by_type`。3type プールの単一平均(`all`)は主結果にしない。
+- 交絡注意: 編集位置が type で違う(type3 は文中)→ type 間比較は `last` 位置を主に、差は中盤層で見る。
   baseline-ok の n を群ごとに併記。
 
-### Phase 3 — per-head mover 解析(hook_z)  ← 完了(標準GQA 4モデル)
-`patching/patch_heads.py`(各モデル自己完結・1GPU、標準 attention のみ = hook_z 必須)
+### Phase 2 — 成分の局在化(attn vs mlp)  ← 完了(6モデル)
+`patching/patch_components.py`(`linear_attn.hook_out` / `attn.hook_out` を自動解決)
+- **普遍**: MLP は後期に書く(mlp·last 0.20–0.36) / 標準GQA は最終位置に late attention mover
+  (attn·last: 8B 0.59・14B 0.51・gemma-2-9b 0.48・phi-4 0.28、hybrid 9B のみ弱い 0.16)。
+- **Qwen 特有**: 「attn が edit を L0 で読む」(gemma-2/phi-4 は MLP が読む)。
+- 旧「Phase 3(次元間比較)」は Phase 1/2 のクロスファミリ検証に吸収済。
+
+### Phase 3 — per-head mover 解析(hook_z)  ← 完了(標準GQA 5モデル)
+`patching/patch_heads.py`(標準 attention のみ = hook_z 必須。hybrid 9B は対象外)
 - attn·last ピーク層周辺で `blocks.L.attn.hook_z` をヘッド単位に patch(最終位置・denoise)。
-- **結果**: 後期 mover は少数の専門ヘッドが担う(top2 で正 recovery の 27–43%、top5 で 44–76%)。
-  トップ: Qwen3-8B L24 H29/H31、Qwen3-14B L28 H21/L29 H20、gemma-2 L28 H8/L26 H12、phi-4 L22 H28/L23 H1。
-  IOI の name-mover 的スパース性が3ファミリー普遍。gemma-2 最集中・phi-4 最分散。
+- **普遍**: 後期 mover は少数の専門ヘッド(top2 で正 recovery の 27–43%、top5 で 44–76%)。
+  トップ: Qwen3-8B L24 H29/H31、Qwen3-14B L28 H21/L29 H20、gemma-2-9b L26 H12/L28 H8、
+  phi-4 L22 H28/L23 H1、gemma-2-27b L23 H2/H3。IOI の name-mover 的スパース性が普遍。
 
-### Phase 4 — ablation による因果検証  ← 完了(標準GQA 4モデル)
-`patching/patch_ablate.py`(Phase 3 の順位から top-k を読み、clean 実行で zero-ablate)
-- メトリクス: `drop_frac = (ld_clean − ld_ablated)/(ld_clean − ld_corr)`(1.0=corruption を完全再現、
-  負=除去で逆に確信が上がる=backup 過補償)。random-head 対照(同一窓・seed 固定)と peak層全ヘッド上界を併記。
-- **結果(top5 mover ablation)**: Qwen3-8B **+0.20**(rand5 +0.004・55×) / Qwen3-14B **+0.17**(rand5≈0) /
-  phi-4 **+0.12**(54×) / gemma-2 **−0.08**。peak層全体: 8B +0.21・14B −0.07・phi-4 −0.01・gemma-2 −0.24。
-- **知見(Phase 3 を精緻化)**:
-  - **sufficiency(Phase 3 の denoise recovery)はスパース&普遍**(top2 ≈ 27–43%)。
-  - **necessity(Phase 4 の ablation)はファミリー依存・非スパース**: Qwen(8B/14B)は mover が**因果的に必要**
-    (top5 で答えが corrupt 方向、random は無効。ただし top2 では弱く top5 で顕在=必要性は十分性より分散)。
-    **gemma-2 は mover/peak層を消しても崩れない=強い backup/冗長(Hydra)**。phi-4 は中間(部分的必要・拡散)。
-  - **含意**: 「復元すれば少数ヘッドで足りる」≠「除去すると壊れる」。**necessity は Qwen 寄り**で、
-    他の Qwen 特有知見(attn@L0・4D-CC 崩壊)と整合。→ 主張は sufficiency 基準で述べ、necessity は
-    ファミリー差として注記(ロードマップの backup/Hydra ガードレール通り)。
+### Phase 4 — ablation による因果検証(necessity)  ← 完了(標準GQA 5モデル)
+`patching/patch_ablate.py`(Phase 3 の順位から top-k を clean 実行で zero-ablate)
+- `drop_frac = (ld_clean − ld_ablated)/(ld_clean − ld_corr)`(1.0=corruption 完全再現、負=除去で確信↑=backup)。
+- **多様化データでの結果(top5 mover / random5)**:
 
-### 再実行TODO(データセット多様化 f16a8e7 を反映)  ← 進行中
-コミット f16a8e7 で type1/2 を多ファミリ A/B ペアに多様化(box/prism/円球/推移)し、
-`family` タグ・`--per-family-cap`・`by_family` 集計を追加。これを反映するため:
-- [ ] **全モデル full 再 eval**(`evaluation/evaluate.py`、`data/questions_augmented.csv`)
-  — 新構成(円/球/超球接線・三角柱/四面体プリズム・平行垂直推移)の解答可能性とサマリ整合。
-  patching の baseline filter とは独立(必須ではないが推奨)。gemma-2 の vLLM NCCL 問題は再燃見込み。
-- [ ] **各モデルのペア再 mine**(新データ+family タグ)→ **patch 再実行**(Phase 1–4)。
-  `--per-family-cap N` でプールを均等化、`by_family`/`by_dim_family` で**構成一般性**(box 以外でも
-  同じ mover circuit か)を検証。特に tetra-prism/超球は非標準図形なので baseline 通過率を要確認。
-- 対象5モデル: Qwen3.5-9B / Qwen3-8B / Qwen3-14B / gemma-2-9b-it / phi-4。
+  | モデル | top5 | random5 | 判定 |
+  |---|---|---|---|
+  | Qwen3-8B | +0.10 | +0.00 | 必要 |
+  | Qwen3-14B | +0.14 | −0.00 | 必要 |
+  | phi-4 | +0.15 | +0.01 | 必要 |
+  | **gemma-2-27b** | **+0.19** | +0.00 | **必要** |
+  | gemma-2-9b | **−0.11** | −0.00 | **backup 冗長** |
 
-### Phase 5(任意・副軸) — 数値タスクの図形同定/operand 回路
+- **知見**: sufficiency(Phase 3 の recovery)はスパース&普遍。necessity は **gemma-2-9b のみ backup 冗長**で、
+  **gemma-2-27b は必要**=backup は gemma ファミリー全体ではなく **9B 固有(スケール/冗長性依存)**。
+  「復元すれば少数ヘッドで足りる」≠「除去すると壊れる」。
+
+### Phase 5 — 構成一般性(by_family)  ← 完了 ★
+Phase 0 の多様化(A/B・family タグ)を活かし、**同じ mover 回路が構成に依らず成立するか**を検証。
+- **指標**: mover 立ち上がり層 = denoise·last の half-recovery(mean≥0.5 の最初の層)を **family 別**に比較。
+- **結果**: どのモデルでも **全構成ファミリでほぼ同一の深さ**で答えが組み立てられる:
+
+  | モデル | pooled(深さ%) | family 間の幅 | baseline |
+  |---|---|---|---|
+  | Qwen3.5-9B | 59% | 59–59%(9 family 完全一致) | 218/342 |
+  | Qwen3-8B | 67% | 64–67% | 146/335 |
+  | Qwen3-14B | 65% | 65–72% | 186/335 |
+  | gemma-2-9b | 62% | 57–62% | 161/389 |
+  | gemma-2-27b | 63% | 57–72% | 141/425 |
+  | phi-4 | 50% | 48–52% | 146/335 |
+
+- **含意**: family 間の幅は各モデル ±0–3層(≈0–7% 深さ)。**box が数で支配的でも、構成別に見れば全て同一局在**
+  → mover 回路は**構成非依存**であり「box アーティファクト」ではない。多様化の目的を達成。
+- 再現(read-only 集計例): `by_family`/`by_dim_family` を各 `patch_results.json` から抽出。
+
+### Phase 6(任意) — gemma-2-9b の backup 解明
+- backup 冗長は **gemma-2-9b 固有**(Phase 4)。反復/二重ヘッド ablation で backup ヘッドを特定し、
+  mover の attend 先を読んで「単一経路」でなく「冗長回路(Hydra)」として記述する。
+
+### Phase 7(任意・副軸) — 数値タスクの図形同定/operand 回路
 - 図形名スワップ(square↔cube 等, span patching)で図形クラス/次元表現を局在化。
 - パラメータスワップ(side length 1↔2)で operand 処理回路(Stolfo 型)。
 
-## 3. 既存コードの活用
-- モデルロード: `recon_eval.py` の TransformerBridge 初期化を雛形に、SAE抜きの薄いローダを新規追加。
-- プロンプト: `prompting.make_prompt_mc` / `apply_chat_template`(rotation=0 で呼ぶ)。
-- 回答抽出・採点: `sae/ablation_eval._extract_answer`。
-- 可視化: `sae/visualize.py` に層曲線/ヒートマップを追記。
+## 3. 知見サマリ(普遍 vs モデル特有)
+| 知見 | 区分 | 詳細 |
+|---|---|---|
+| 次元不変回路(早期read→後期decide) | **普遍** | 2D/3D/4D 同一・6モデル(絶対層は深さでシフト) |
+| 4D 難化は回路移動でなく正解率低下 | **普遍** | baseline 通過数が減る。CC が最も浸食(phi-4 のみ 4D-CC 残存) |
+| MLP 後期書き込み / 標準GQA late attn mover | **普遍** | mlp·last 0.20–0.36、attn·last は hybrid 除き強い |
+| 少数の専門 mover ヘッド(sufficient) | **普遍** | top2 27–43%(標準GQA 5モデル) |
+| **mover 回路の構成非依存(Phase 5)** | **普遍** | box/円/角柱/推移/simplex が同一深さ(6モデル) |
+| attn が edit を L0 で読む | Qwen 特有 | gemma-2/phi-4 は MLP が読む |
+| 4D-CC 確信崩壊(Yes→No 反転) | Qwen 特有 | gemma-2/phi-4 は Yes 維持 |
+| mover の necessity(除去で崩れる) | 規模/冗長性依存 | Qwen/phi-4/gemma-2-**27b** 必要、gemma-2-**9b** は backup |
 
-## 4. リスクと分岐 — モデルロード(Phase 1 着手前の最重要決定)
-**実測**: インストール済 `transformer-lens==2.17.0` の `OFFICIAL_MODEL_NAMES` は
-Qwen3 系(0.6B/1.7B/4B/8B/14B)を持つが **Qwen3.5 は未収録**(`Qwen/Qwen3.5-9B` なし)。
-評価セットの密モデル(Qwen3.5-9B/27B, Qwen3-32B, gemma-4)はいずれも 2.17.0 では非ネイティブ。
-TransformerLens のリリースノートでは新しめのバージョンで Qwen3.5 対応が追加されている。
+## 4. 残タスク
+- **全モデル full 再eval**(`evaluation/evaluate.py`, `data/questions_augmented.csv`) — 多様化データでの
+  サマリ整合 + 新構成の解答可能性。patching の baseline filter とは独立(必須ではないが推奨)。
+  gemma-2-27b は A6000 単体不可(A100 80GB / device_map)、vLLM TP=2 は NCCL 不安定 → HF フォールバック。
+- Phase 6(gemma-2-9b backup)/ Phase 7(数値 operand) は任意。
 
-選択肢:
-- **(A) transformer-lens を Qwen3.5 対応版へ更新**(評価セットと完全一致)。更新後 `Qwen/Qwen3.5-9B`
-  が `OFFICIAL_MODEL_NAMES` に入ることを確認。SAE未使用なので sae-lens 連動は問題になりにくいが、
-  依存衝突回避のため **patching 専用 venv** を別に切るのが安全。
-- **(B) Qwen3-8B を使用**(2.17.0 でネイティブ・密・~8B で patching 最適)。評価セット外なので
-  `evaluate.py` で同条件ベースラインを取り直す(同 Qwen3 系で Qwen3.5-9B に近い)。即着手可。
-- **(C) TransformerBridge**(`recon_eval.py` の `boot_transformers` 経路)で Qwen3.5-9B を HF 直読み。
-  非収録でもフック可能な場合がある。`model.hook_dict` に `blocks.{L}.hook_resid_post` が出るか要検証。
+## 5. 既存コードの活用
+- モデルロード: `boot_transformers`(SAE 抜きの薄いローダ)。
+- プロンプト: `prompting.make_prompt_mc` / `apply_chat_template`(rotation=0)。
+- 可視化: `patch_run`/`patch_heads`/`patch_ablate` が各自プロット出力。
 
-推奨: **(A) を第一**(評価整合)、ダメなら **(B) を即時フォールバック**。
-- 9B のメモリ → bf16・単一GPUで全層 resid キャッシュが乗るか確認(必要なら層を分割キャッシュ)。
-
-### 解決済(2026-06-29 スパイク結果)
-- **環境**: 単一 `.venv` に集約。`transformer-lens` 3.3.0 が vllm / sae-lens と共存するため
-  patching 専用 venv は不要(eval・SAE・patching を1環境で実行)。起動: `.venv/bin/python ...`。
-- **ロード経路確定**: `from transformer_lens.model_bridge import TransformerBridge;
-  TransformerBridge.boot_transformers("Qwen/Qwen3.5-9B", device="cuda")` で成功。
-  32層 / d_model=4096 / d_vocab=248320。`blocks.{L}.hook_resid_post` 発火確認済。
-  回答トークン: ` A`=357, ` B`=417(単一トークン)。
-- **注意1**: ロードに ~480s。Phase 1 は1回ロードで全ペア処理する設計。
-- **注意2(解決済)**: Qwen3.5-9B は(一部層が)**linear/hybrid attention**(`blocks.{L}.linear_attn.*`)で
-  標準 `hook_z`(per-head)が無い。→ Phase 2 は `linear_attn.hook_out`/`attn.hook_out` を自動解決して対応。
-  **per-head(Phase 3)/ablation(Phase 4)は標準 attention 必須**のため標準GQA の Qwen3-8B/14B・gemma-2-9b・phi-4 を追加
-  (選定経緯: `patching/MODEL_SELECTION.md`)。
-- **実行環境の移行**: 現行は 4× **RTX A6000 (48GB)**(旧: A100 80GB)。14B/gemma-2/phi-4 は fp32 で載らず
-  `--dtype bfloat16`(指標は dtype 頑健)。27B は 48GB 単体不可(要 A100 80GB か device_map)。vLLM TP=2 は
-  本環境の NCCL(NVLink 非搭載)で不安定 → 27B eval は HF フォールバック(conf 空欄)。
+## 6. 環境・モデルロード(解決済)
+- **環境**: 単一 `.venv`(`transformer-lens` 3.3.0 が vllm/sae-lens と共存)。起動 `.venv/bin/python`。
+- **ロード**: `TransformerBridge.boot_transformers("<model>", device="cuda", dtype=…)`。ロード ~8分。
+- **dtype**: 14B/gemma-2/phi-4 は 48GB A6000 に fp32 不可 → `--dtype bfloat16`(指標は dtype 頑健)。
+  27B は 48GB 単体不可(A100 80GB / device_map / shard)。
+- **実行**: 4× RTX A6000(48GB)。長時間ジョブは **`setsid` でデタッチ**(ssh セッション終了に巻き込まれない)、
+  **同時2本**に抑えて host RAM/swap 逼迫を回避(SLURM 割り当て外で直接実行のため)。
+- **アーキ制約**: hybrid 9B は per-head hook_z なし(Phase 3/4 対象外)。gemma-3(vision tower)/gemma-4
+  (TL 未対応)は bridge 不可。gpt-oss-20B は 16tok で empty ≈100%(推論漏れ)。
 
 ## 参考(設計根拠)
-- Heimersheim & Nanda, How to use and interpret activation patching (2024) — denoising 推奨, 解釈の落とし穴
+- Heimersheim & Nanda, How to use and interpret activation patching (2024) — denoising 推奨, 落とし穴
 - Zhang & Nanda, Best Practices of Activation Patching (2024) — logit diff 推奨
 - Meng et al., Causal Tracing (2022) — (層×位置) マップ
+- Wang et al. (ICLR'23) — IOI, name-mover ヘッドと最小ペア
+- Conmy et al. (NeurIPS'23) — ACDC, 成分/ヘッド単位の自動回路同定
 - Stolfo et al. (EMNLP'23) — attn が operand→answer 移送, 後段 MLP が計算
-- Nikankin et al. (2024) — 後段 MLP の sparse heuristics
