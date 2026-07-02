@@ -162,13 +162,14 @@ Phase 0 の多様化(A/B・family タグ)を活かし、**同じ mover 回路が
 | 知見 | 区分 | 詳細 |
 |---|---|---|
 | 次元不変回路(早期read→後期decide) | **普遍** | 2D/3D/4D 同一・6モデル(絶対層は深さでシフト) |
-| 4D 難化は回路移動でなく正解率低下 | **普遍** | baseline 通過数が減る。CC が最も浸食(phi-4 のみ 4D-CC 残存) |
+| 4D 難化は回路移動でなく正解率低下 | **普遍** | 次元が上がるほど baseline 通過ペアが減る(回路の位置は不変) |
 | MLP 後期書き込み / 標準GQA late attn mover | **普遍** | mlp·last 0.20–0.36、attn·last は hybrid 除き強い |
 | 少数の専門 mover ヘッド(sufficient) | **普遍** | top2 27–43%(標準GQA 5モデル) |
 | **mover 回路の構成非依存(Phase 5)** | **普遍** | box/円/角柱/推移/simplex が同一深さ(6モデル) |
-| attn が edit を L0 で読む | Qwen 特有 | gemma-2/phi-4 は MLP が読む |
-| 4D-CC 確信崩壊(Yes→No 反転) | Qwen 特有 | gemma-2/phi-4 は Yes 維持 |
+| attn が edit を L0 で読む | Qwen 特有(要再確認) | gemma-2/phi-4 は MLP が読む。components 多様化再実行で確認中 |
 | mover の necessity(除去で崩れる) | 規模/冗長性依存 | Qwen/phi-4/gemma-2-**27b** 必要、gemma-2-**9b** は backup |
+
+> **削除した旧知見**: 「4D-CC 確信崩壊(Yes→No 反転)は Qwen 特有」は、多様化 CC で精査した結果 **構成特有**(simplex では小型 Qwen、box では 14B/phi-4、intersect では 14B/gemma-2-9b/phi-4 が崩壊、円/接線は頑健)であり、クリーンな「Qwen 特有」ではないと判明。重要度が低いためレポートから除外。
 
 ## 4. 残タスク
 - **全モデル full 再eval**(`evaluation/evaluate.py`, `data/questions_augmented.csv`) — 多様化データでの
