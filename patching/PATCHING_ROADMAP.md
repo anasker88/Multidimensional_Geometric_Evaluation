@@ -1,8 +1,8 @@
 # Activation Patching ロードマップ — 次元別・構成別の幾何推論回路調査
 
 最終更新: 2026-07-02
-状態: **Phase 0–5 + full 再eval 完了**(6モデル・3ファミリー、データセット多様化済み)。図表の代表モデルは **Qwen3-8B**。
-残タスク: **components(attn/mlp) の多様化再実行(進行中)** / gemma-2-9b backup 解明(任意) / 数値タスク operand 回路(任意・副軸)。
+状態: **Phase 0–5 + full 再eval + 成分(attn/mlp)多様化再実行 完了**(6モデル・3ファミリー、データセット多様化済み)。図表の代表モデルは **Qwen3-8B**。
+残タスク: gemma-2-9b backup 解明(任意) / 数値タスク operand 回路(任意・副軸)。
 
 ## 0. 目的と科学的問い
 
@@ -101,13 +101,14 @@ denoising では 0(corrupted のまま)→ 1(clean を完全回復)。
 - 交絡注意: 編集位置が type で違う(type3 は文中)→ type 間比較は `last` 位置を主に、差は中盤層で見る。
   baseline-ok の n を群ごとに併記。
 
-### Phase 2 — 成分の局在化(attn vs mlp)  ← 多様化データで再実行中(下記数値は初期データ・暫定)
+### Phase 2 — 成分の局在化(attn vs mlp)  ← 完了(6モデル・多様化データ)
 `patching/patch_components.py`(`linear_attn.hook_out` / `attn.hook_out` を自動解決)
-- **暫定知見(初期データ)**: MLP は後期に書く(mlp·last 0.20–0.36) / 標準GQA は最終位置に late attention mover
-  (attn·last: 8B 0.59・14B 0.51・gemma-2-9b 0.48・phi-4 0.28、hybrid 9B のみ弱い 0.16)。
-  「attn が edit を L0 で読む」は Qwen 寄り(gemma-2/phi-4 は MLP が読む)。
-- **注意**: 5モデルは旧ペア・gemma-2-27b のみ多様化ペアで不公平 → **全6モデルを多様化ペアで再実行中**(§4)。
-  確定値は完了後に更新。旧「Phase 3(次元間比較)」は Phase 1/2 のクロスファミリ検証に吸収済。
+- **普遍**: MLP は後期に書く(mlp·last 0.09–0.34) / 標準GQA は最終位置に late attention mover
+  (attn·last: 8B 0.58・14B 0.53・gemma-2-9b 0.48・phi-4 0.28・27B 0.27、hybrid 9B のみ弱い 0.15)。
+- **モデル依存(edit を誰が読むか)**: Qwen は attention が L0 で読む(attn·edit 8B 0.47・14B 0.95・9B 0.53)、
+  phi-4・gemma-2-27b は MLP が L0 で読む(mlp·edit 0.52・0.95)、gemma-2-9b は両方弱め(拡散)。
+- 5モデル(旧ペア)と gemma-2-27b の不公平を解消するため **全6モデルを多様化ペアで再実行済**。
+  旧「Phase 3(次元間比較)」は Phase 1/2 のクロスファミリ検証に吸収済。
 
 ### Phase 3 — per-head mover 解析(hook_z)  ← 完了(標準GQA 5モデル)
 `patching/patch_heads.py`(標準 attention のみ = hook_z 必須。hybrid 9B は対象外)
@@ -164,24 +165,22 @@ Phase 0 の多様化(A/B・family タグ)を活かし、**同じ mover 回路が
 |---|---|---|
 | 次元不変回路(早期read→後期decide) | **普遍** | 2D/3D/4D 同一・6モデル(絶対層は深さでシフト) |
 | 4D 難化は回路移動でなく正解率低下 | **普遍** | 次元が上がるほど baseline 通過ペアが減る(回路の位置は不変) |
-| MLP 後期書き込み / 標準GQA late attn mover | **普遍**(暫定) | mlp·last 0.20–0.36、attn·last は hybrid 除き強い。多様化再実行で確定予定 |
+| MLP 後期書き込み / 標準GQA late attn mover | **普遍** | mlp·last 0.09–0.34、attn·last は標準GQA で強(hybrid 弱)。6モデル多様化データ |
 | 少数の専門 mover ヘッド(sufficient) | **普遍** | top2 27–43%(標準GQA 5モデル) |
 | **mover 回路の構成非依存(Phase 5)** | **普遍** | box/円/角柱/推移/simplex が同一深さ(6モデル) |
-| attn が edit を L0 で読む | Qwen 特有(要再確認) | gemma-2/phi-4 は MLP が読む。components 多様化再実行で確認中 |
+| edit を誰が読むか(attn@L0 / MLP@L0) | モデル依存 | Qwen=attn@L0 / phi-4・gemma-2-27b=MLP@L0 / gemma-2-9b=弱(拡散) |
 | mover の necessity(除去で崩れる) | 規模/冗長性依存 | Qwen/phi-4/gemma-2-**27b** 必要、gemma-2-**9b** は backup |
 
 > **削除した旧知見**: 「4D-CC 確信崩壊(Yes→No 反転)は Qwen 特有」は、多様化 CC で精査した結果 **構成特有**(simplex では小型 Qwen、box では 14B/phi-4、intersect では 14B/gemma-2-9b/phi-4 が崩壊、円/接線は頑健)であり、クリーンな「Qwen 特有」ではないと判明。重要度が低いためレポートから除外。
 
 ## 4. 残タスク
-- **components(attn/mlp) の多様化再実行 ← 進行中**: 旧 Phase 2 は5モデルが旧ペア(family タグ無し)で
-  gemma-2-27b(多様化)と不公平だったため、全6モデルを多様化ペアで `patch_components` 再実行中(detached, A6000)。
-  完了後、artifact/roadmap に「MLP 後期書き込み / edit を誰が読むか」を公平な形で反映。
 - **Phase 6(gemma-2-9b backup, 任意)**: backup 冗長は 9B 固有(規模依存)。反復/二重ヘッド ablation で backup ヘッドを特定。
 - **Phase 7(数値 operand, 任意・副軸)**: 図形名/パラメータ span patching。
 
 ### 完了済(参考)
 - **全モデル full 再eval**: `results/eval/final_20260701/`(多様化データ `questions_augmented.csv`・**全20モデル単一バッチ**・
   greedy+rep1.0・A100 80GB)。gemma-2-27b は TP=1 で **conf 取得済**(旧「conf 空欄」解消)。patching の baseline filter とは独立。
+- **成分(attn/mlp)多様化再実行**: 全6モデルを多様化ペアで `patch_components` 再実行し、gemma-2-27b との公平性を確保(Phase 2 に反映済)。
 
 ## 5. 既存コードの活用
 - モデルロード: `boot_transformers`(SAE 抜きの薄いローダ)。
