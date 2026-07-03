@@ -152,24 +152,30 @@ Phase 0 の多様化(A/B・family タグ)を活かし、**同じ mover 回路が
   → mover 回路は**構成非依存**であり「box アーティファクト」ではない。多様化の目的を達成。
 - 再現(read-only 集計例): `by_family`/`by_dim_family` を各 `patch_results.json` から抽出。
 
-### Phase 6(任意) — gemma-2-9b の backup 解明
+### Phase 6(任意) — gemma 系後期層の抑制機構(backup + 競合抑制)
 - backup 冗長は **gemma-2-9b 固有**(Phase 4)。反復/二重ヘッド ablation で backup ヘッドを特定し、
   mover の attend 先を読んで「単一経路」でなく「冗長回路(Hydra)」として記述する。
+- **視野を拡張(査読提案)**: gemma-2-27b の決定は L28–29 で正答を書いた後、**L42–43 で競合 B を抑制する尾部**を持つ
+  (`patch_verify_logits.py` の個別 logit で確認)。この後期抑制に負成分/copy-suppression 的ヘッド
+  (McDougall et al.)がいる可能性。9b の backup と合わせ「**gemma 系後期層の抑制機構**」として調べる価値。
 
 ### Phase 7(任意・副軸) — 数値タスクの図形同定/operand 回路
 - 図形名スワップ(square↔cube 等, span patching)で図形クラス/次元表現を局在化。
 - パラメータスワップ(side length 1↔2)で operand 処理回路(Stolfo 型)。
 
-## 3. 知見サマリ(普遍 vs モデル特有)
-| 知見 | 区分 | 詳細 |
+## 3. 知見サマリ(5発見 / 主結論: 局在は普遍・必要性は不均一)
+
+> **主結論**: **局在(深さ＋担う mover ヘッド)は次元・type(PPC/IC/CC)・構成 family を通じて普遍。
+> 一方、必要性(冗長性)だけが規模・type・構成 family に依存する。** (Hydra / IOI backup と接続)
+
+| 発見 | 区分 | 詳細 |
 |---|---|---|
-| 次元不変回路(早期read→後期decide) | **普遍** | 2D/3D/4D 同一・6モデル(絶対層は深さでシフト) |
-| 4D 難化は回路移動でなく正解率低下 | **普遍** | 次元が上がるほど baseline 通過ペアが減る(回路の位置は不変) |
-| MLP 後期書き込み / 標準GQA late attn mover | **普遍** | mlp·last 0.09–0.34、attn·last は標準GQA で強(hybrid 弱)。6モデル多様化データ |
-| 少数の専門 mover ヘッド(sufficient) | **普遍** | top2 27–43%(標準GQA 5モデル) |
-| **mover 回路の構成非依存(Phase 5)** | **普遍** | box/円/角柱/推移/simplex が同一深さ(6モデル) |
-| edit を誰が読むか(attn@L0 / MLP@L0) | モデル依存 | Qwen=attn@L0 / phi-4・gemma-2-27b=MLP@L0 / gemma-2-9b=弱(拡散) |
-| mover の necessity(除去で崩れる) | 規模/冗長性依存 | Qwen/phi-4/gemma-2-**27b** 必要、gemma-2-**9b** は backup |
+| **発見1** 次元不変回路(早期read→後期decide) | **普遍** | 決定層は 2D/3D/4D・PPC/IC/CC で±1–3層一致(6モデル)。担うヘッドも次元・type で共通(3次元共通 3–5/5、3type 共通 3–4/5、各 type∩pooled 4–5/5)。絶対層は深さでシフト。CI: 決定/edit ±0–1層。gemma-2-27b は二段階(L28–29 で正答書込=本物、L42–43 で競合抑制) |
+| **発見2** MLP 後期書込 / 標準GQA late attn mover | **普遍** | mlp·last 0.09–0.34、attn·last は標準GQA で強(hybrid 弱)。6モデル多様化データ |
+| **発見3** 少数の専門 mover ヘッド(sufficient) | **普遍** | top2 27–43%(標準GQA 5モデル)。#1/#2 recovery の CI は全モデル 0 除外 |
+| **発見4** mover の necessity | **不均一(普遍でない)** | 規模・type・構成 family 依存。Qwen/phi-4/gemma-2-**27b** 必要、gemma-2-**9b** は backup。type 別: Qwen3-8B は IC で不要(gap −0.02[−.09,+.04]=真に冗長・同ヘッド)、gemma-2-9b の backup は PPC/IC 集中(IC −0.38[−.46,−.30])で CC は必要。構成 family でも box/prism 集中 |
+| **発見5** mover の構成非依存(Phase 5) | **普遍** | box/円/角柱/推移/simplex が同一深さ(6モデル)＋担うヘッドも構成間で概ね共有(主要 family top5 ≈4/5) |
+| (参考) edit を誰が読むか(attn@L0 / MLP@L0) | モデル依存 | Qwen=attn@L0 / phi-4・gemma-2-27b=MLP@L0 / gemma-2-9b=弱(拡散)。edit·L0 は埋め込みスワップに近く「誰が読むか」の証拠としては退化的 |
 
 > **削除した旧知見**: 「4D-CC 確信崩壊(Yes→No 反転)は Qwen 特有」は、多様化 CC で精査した結果 **構成特有**(simplex では小型 Qwen、box では 14B/phi-4、intersect では 14B/gemma-2-9b/phi-4 が崩壊、円/接線は頑健)であり、クリーンな「Qwen 特有」ではないと判明。重要度が低いためレポートから除外。
 
@@ -184,7 +190,13 @@ Phase 0 の多様化(A/B・family タグ)を活かし、**同じ mover 回路が
 - **ブートストラップ 95% CI(査読点9)**: `patch_bootstrap.py`(GPU 不要、per_pair をペア単位で B=10,000 リサンプル)。
   結果 `results/patching/bootstrap_ci.json`。**主要主張の CI はいずれも null を除外** — half-recovery ランドマーク
   (decision ±0–1層・edit ハンドオフ ±0–1層)、top5 ablation の Δ(全モデルで 0 を除外。標準GQA 4モデルは正=必要、
-  gemma-2-9b は有意に負=backup 冗長)、主要 mover ヘッド recovery。artifact(§02/§05/§07・必要性図に誤差棒)に反映済。
+  gemma-2-9b は有意に負=backup 冗長)、主要 mover ヘッド recovery。同スクリプトに **0.75 閾値感度**(決定層は5モデルで +0〜+4層、
+  多くは +0)と **A/B 対称性**(中央値 ρ 0.69–1.22、中立点 recovery 0.41–0.55)も追加。artifact(§02/§05/§07・必要性図に誤差棒)に反映済。
+- **0.5 閾値の妥当性と g27b 二段階の解明(査読)**: 参考文献 [6] Heimersheim & Nanda (2024) を指標選択根拠として追加。
+  gemma-2-27b は決定が二段階(0.5 が L29、≥0.75 が L42)。`patch_verify_logits.py` で denoise:last の logit(A)/logit(B) を
+  **個別記録**(A100・`results/patching/verify/gemma2_27b_logits.json`)し、**L29 交差は正答 logit(A) が既に ≈70–78% 回復した
+  「本物の決定」**(誤答破壊の偽陽性ではない)と確認。後期 L42–43 は競合 B の抑制尾部。→ 50–67% 相対深さは g27b でも裏付け。
+  artifact §02 に層別 logit プロット(`c_g27b`)を追加。
 
 ## 5. 既存コードの活用
 - モデルロード: `boot_transformers`(SAE 抜きの薄いローダ)。

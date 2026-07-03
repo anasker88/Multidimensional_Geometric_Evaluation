@@ -163,6 +163,18 @@ def bootstrap_model(name: str, run_sub: str, ha_sub: Optional[str],
                 "gap": _boot_scalar(gap, boota),
                 "n": len(oka),
             }
+            # per-type necessity: the model-level verdict is not uniform inside a
+            # model (e.g. Qwen3-8B's top-5 are redundant for the IC type though
+            # they are the same heads). Bootstrap the top5-rand5 gap per type.
+            tlab = {"1": "PPC", "2": "IC", "3": "CC"}
+            by_type: Dict[str, Dict] = {}
+            for tk, tname in tlab.items():
+                idx = [i for i, p in enumerate(oka) if str(p.get("type_key")) == tk]
+                if len(idx) >= 5:
+                    g = gap[idx]
+                    by_type[tname] = {**_boot_scalar(g, _boot_idx(len(g), B, rng)),
+                                      "n": len(g)}
+            out["ablation"]["by_type"] = by_type
     return out
 
 
