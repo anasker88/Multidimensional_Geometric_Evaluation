@@ -104,28 +104,47 @@ def chat(
         return text.strip()
 
     if model is None:
+        import time as _time
+        import concurrent.futures as _cf
+        from common import prompting as _pmod
         client = _build_azure_client()
-        for prompt in prompts:
-            response = client.chat.completions.create(
+        # reasoning models (o1/gpt-5) honor reasoning_effort; set via --reasoning-effort.
+        effort = getattr(_pmod, "_REASONING_EFFORT", None)
+        max_workers = int(os.getenv("AZURE_CONCURRENCY", "16"))
+
+        def _one(prompt: str) -> str:
+            kw = dict(
                 model=model_name,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant."},
                     {"role": "user", "content": prompt},
                 ],
             )
-            content = None
-            try:
-                content = response.choices[0].message.content.strip()
-            except Exception:
+            if effort:
+                kw["reasoning_effort"] = effort
+            for attempt in range(5):
                 try:
-                    content = response["choices"][0]["message"]["content"].strip()
-                except Exception:
+                    response = client.chat.completions.create(**kw)
                     try:
-                        content = str(response).strip()
+                        return (response.choices[0].message.content or "").strip()
                     except Exception:
-                        content = ""
-            responses.append(content)
-            token_lps.append(None)  # logprobs not available via Azure chat API
+                        return str(response).strip()
+                except Exception as e:
+                    msg = str(e).lower()
+                    if "reasoning_effort" in msg or "unsupported" in msg or "unknown" in msg:
+                        kw.pop("reasoning_effort", None)  # model rejects the param
+                        continue
+                    if attempt == 4:
+                        return ""
+                    _time.sleep(2 * (attempt + 1))  # backoff on rate-limit/transient
+            return ""
+
+        responses = [""] * len(prompts)
+        with _cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {ex.submit(_one, p): i for i, p in enumerate(prompts)}
+            for fut in _cf.as_completed(futs):
+                responses[futs[fut]] = fut.result()
+        token_lps = [None] * len(prompts)  # logprobs not available via Azure chat API
         return responses, token_lps
 
     if len(prompts) == 0:
@@ -917,8 +936,8 @@ if __name__ == "__main__":
         "--reasoning-effort",
         type=str,
         default=None,
-        choices=["low", "medium", "high"],
-        help="Reasoning-effort hint for chat templates that support it (e.g. gpt-oss harmony)",
+        choices=["minimal", "low", "medium", "high"],
+        help="Reasoning-effort hint: chat templates that support it (gpt-oss harmony) + passed to reasoning API models (o1/gpt-5) via the Azure path. 'minimal' = direct answer (comparable to non-reasoning models).",
     )
     parser.add_argument("--results-root", type=str, default=RESULTS_ROOT, help="Base directory to write results into")
     parser.add_argument("--timestamp", type=str, default=None, help="Timestamp string to use for this run (default: now)")
