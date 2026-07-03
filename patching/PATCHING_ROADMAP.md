@@ -181,6 +181,10 @@ Phase 0 の多様化(A/B・family タグ)を活かし、**同じ mover 回路が
 - **全モデル full 再eval**: `results/eval/final_20260701/`(多様化データ `questions_augmented.csv`・**全20モデル単一バッチ**・
   greedy+rep1.0・A100 80GB)。gemma-2-27b は TP=1 で **conf 取得済**(旧「conf 空欄」解消)。patching の baseline filter とは独立。
 - **成分(attn/mlp)多様化再実行**: 全6モデルを多様化ペアで `patch_components` 再実行し、gemma-2-27b との公平性を確保(Phase 2 に反映済)。
+- **ブートストラップ 95% CI(査読点9)**: `patch_bootstrap.py`(GPU 不要、per_pair をペア単位で B=10,000 リサンプル)。
+  結果 `results/patching/bootstrap_ci.json`。**主要主張の CI はいずれも null を除外** — half-recovery ランドマーク
+  (decision ±0–1層・edit ハンドオフ ±0–1層)、top5 ablation の Δ(全モデルで 0 を除外。標準GQA 4モデルは正=必要、
+  gemma-2-9b は有意に負=backup 冗長)、主要 mover ヘッド recovery。artifact(§02/§05/§07・必要性図に誤差棒)に反映済。
 
 ## 5. 既存コードの活用
 - モデルロード: `boot_transformers`(SAE 抜きの薄いローダ)。
