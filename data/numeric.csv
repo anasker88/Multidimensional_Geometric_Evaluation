@@ -79,7 +79,7 @@ question,dimension,answer
 "What is the hyper-volume of a rectangular 4-parallelotope with length 6, width 4, height 5, and depth 3?",4,360
 "What multiple of \pi is the area of a circle with radius 6?",2,36
 "What multiple of \pi is the volume of a sphere with radius 6?",3,288
-"What multiple of \pi^2 is the hyper-volume of a 3-sphere with radius 6?",4,648
+"What multiple of \pi^2 is the hyper-volume of a 4-ball with radius 6?",4,648
 "What is the length of the diagonal of a rectangle with length 6 and width 8?",2,10
 "What is the length of the space diagonal of a rectangular prism with length 2, width 3, and height 6?",3,7
 "What is the length of the 4D diagonal of a rectangular 4-parallelotope with length 1, width 2, height 4, and depth 10?",4,11
@@ -109,7 +109,7 @@ question,dimension,answer
 "What is the hyper-volume of a rectangular 4-parallelotope with length 8, width 6, height 5, and depth 3?",4,720
 "What multiple of \pi is the area of a circle with radius 8?",2,64
 "What multiple of \pi is the volume of a sphere with radius 9?",3,972
-"What multiple of \pi^2 is the hyper-volume of a 3-sphere with radius 8?",4,2048
+"What multiple of \pi^2 is the hyper-volume of a 4-ball with radius 8?",4,2048
 "What is the length of the diagonal of a rectangle with length 5 and width 12?",2,13
 "What is the length of the space diagonal of a rectangular prism with length 1, width 4, and height 8?",3,9
 "What is the length of the 4D diagonal of a rectangular 4-parallelotope with length 2, width 4, height 5, and depth 6?",4,9

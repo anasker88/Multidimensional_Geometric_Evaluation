@@ -614,6 +614,11 @@ def evaluate(
                         per_type_data["numeric_mc"]["num_choices"].append(nch)
                         per_type_data["numeric_mc"]["canon_answers"].append("A")
 
+    # Optional type restriction (e.g. re-evaluate only numeric after a dataset fix).
+    _only = globals().get("_ONLY_TYPES")
+    if _only:
+        per_type_data = {k: v for k, v in per_type_data.items() if k in _only}
+
     total = 0
     total_correct = 0
     total_empty = 0
@@ -912,6 +917,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate models on geometry dataset using vLLM or Azure OpenAI.")
     parser.add_argument("--models", type=str, help="Comma-separated model names to evaluate (default: built-in list)")
     parser.add_argument("--dims", type=str, default="2", help="Comma-separated dimensions to evaluate (default: 2)")
+    parser.add_argument("--types", type=str, default=None,
+                        help="Restrict evaluated question types (comma-separated of 1,2,3,numeric,numeric_mc). "
+                             "Use for a cheap partial re-eval after a dataset fix, e.g. --types numeric,numeric_mc.")
     parser.add_argument("--batch-size", type=int, default=8, help="Batch size for local generation")
     parser.add_argument("--max-new-tokens", type=int, default=2048, help="Max new tokens to generate per prompt")
     parser.add_argument("--greedy", action=argparse.BooleanOptionalAction, default=True, help="Greedy decoding (default). Use --no-greedy to sample at --temperature.")
@@ -973,6 +981,9 @@ if __name__ == "__main__":
             print("Invalid timestamp provided; using default.", file=sys.stderr)
     globals()["RESULTS_ROOT"] = args.results_root
     _set_reasoning_effort(getattr(args, "reasoning_effort", None))
+
+    if getattr(args, "types", None):
+        globals()["_ONLY_TYPES"] = {t.strip() for t in args.types.split(",") if t.strip()}
 
     if args.models:
         model_names = [m.strip() for m in args.models.split(",") if m.strip()]

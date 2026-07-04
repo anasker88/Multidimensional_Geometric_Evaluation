@@ -161,7 +161,7 @@ def gen_4d():
         )
         if r % 2 == 0:
             add(
-                f"What multiple of pi^2 is the hyper-volume of a 3-sphere with radius {r}?",
+                f"What multiple of pi^2 is the hyper-volume of a 4-ball with radius {r}?",
                 4, (r**4)//2
             )
 

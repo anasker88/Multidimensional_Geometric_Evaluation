@@ -239,7 +239,7 @@ def _distractor_numbers(question: str) -> list[int]:
     """Integer parameters of a numeric question (strips π / dimension tokens)."""
     s = question.lower().replace("2-dimensional", "")
     s = s.replace("\\pi^2", "").replace("\\pi", "").replace("pi^2", "").replace("pi", "")
-    s = re.sub(r"\b\d+-(simplex|sphere|parallelotope|cell)\b", "", s)
+    s = re.sub(r"\b\d+-(simplex|sphere|parallelotope|cell|ball)\b", "", s)
     s = re.sub(r"\b4d\b", "", s)
     return [int(x) for x in re.findall(r"\d+", s)]
 
@@ -314,7 +314,7 @@ def make_numeric_distractors(question: str, answer: str, n: int = 3) -> list[str
         elif "hyper-volume of a rectangular 4-parallelotope" in s:
             l, w, h, d = m[:4]
             add(2 * (l * w * h + l * w * d + l * h * d + w * h * d), l * w * h, 2 * l * w * h * d)
-        elif "hyper-volume of a 3-sphere" in s:
+        elif "hyper-volume of a 4-ball" in s:
             r = m[0]; add(2 * r ** 3, r ** 4, 4 * r ** 3, r ** 3)       # hypersurface mult / wrong coeff
         elif "4-simplex" in s and "hyper-volume" in s:                  # (1/4)·base·height
             if "legs" in s:
