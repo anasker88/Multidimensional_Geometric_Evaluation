@@ -2,7 +2,7 @@
 
 最終更新: 2026-07-02
 状態: **Phase 0–5 + full 再eval + 成分(attn/mlp)多様化再実行 完了**(6モデル・3ファミリー、データセット多様化済み)。図表の代表モデルは **Qwen3-8B**。
-残タスク: gemma-2-9b backup 解明(任意) / 数値タスク operand 回路(任意・副軸)。
+残タスク: 数値タスク operand 回路(任意・副軸)。※ gemma-2-9b backup 解明は Phase 6 で完了(L28 H13)。
 
 ## 0. 目的と科学的問い
 
@@ -152,12 +152,17 @@ Phase 0 の多様化(A/B・family タグ)を活かし、**同じ mover 回路が
   → mover 回路は**構成非依存**であり「box アーティファクト」ではない。多様化の目的を達成。
 - 再現(read-only 集計例): `by_family`/`by_dim_family` を各 `patch_results.json` から抽出。
 
-### Phase 6(任意) — gemma 系後期層の抑制機構(backup + 競合抑制)
-- backup 冗長は **gemma-2-9b 固有**(Phase 4)。反復/二重ヘッド ablation で backup ヘッドを特定し、
-  mover の attend 先を読んで「単一経路」でなく「冗長回路(Hydra)」として記述する。
-- **視野を拡張(査読提案)**: gemma-2-27b の決定は L28–29 で正答を書いた後、**L42–43 で競合 B を抑制する尾部**を持つ
-  (`patch_verify_logits.py` の個別 logit で確認)。この後期抑制に負成分/copy-suppression 的ヘッド
-  (McDougall et al.)がいる可能性。9b の backup と合わせ「**gemma 系後期層の抑制機構**」として調べる価値。
+### Phase 6 — gemma-2-9b backup ヘッドの特定  ← 完了 ★
+- `patch_phase6.py`(top5 除去後の各ヘッドのマージナル必要性 `drop_frac(top5∪h)−drop_frac(top5)`)。
+  最強セル **IC ∩ box/prism**(n=53、drop_frac(top5)=−0.38)で測定。結果 `results/patching/phase6/gemma2_9b_ic/`。
+- **backup は1個のヘッド L28 H13 が支配**(マージナル **+0.42**、2位 +0.11)。単独 mover recovery は **+0.009(rank 11)**
+  ＝普段ほぼ無効だが primary 除去で決定を担う **教科書的 Hydra 自己修復ヘッド**。primary 5個中3個が L28(H8/H9/H12)で、
+  **L28 H13 は同一層の控えヘッド**。L28 H13 を足すだけで必要性が −0.38→+0.04 に反転、top5+8 で +0.36(他モデル並)。
+  → gemma-2-9b は mover 回路に依存していないのではなく**冗長コピー**を持つ。artifact §04 に反映済。
+  - **勝者バイアス対策**: L28 H13 マージナル +0.42 は winner's curse でない — ブートストラップ CI **[0.36, 0.49]**、
+    分割検証(半分で選抜・半分で評価)でも **+0.42・200/200 split で L28 H13 が勝者**(`bootstrap_ci` と同流儀、JSON に格納)。
+- **残(任意)**: 同じ控えヘッドが他 backup セル(IC vs CC)にも現れるか。gemma-2-27b の後期(L42–43)競合抑制尾部
+  (`patch_verify_logits.py`)の copy-suppression 的ヘッド(McDougall et al.)調査。
 
 ### Phase 7(任意・副軸) — 数値タスクの図形同定/operand 回路
 - 図形名スワップ(square↔cube 等, span patching)で図形クラス/次元表現を局在化。
@@ -180,8 +185,8 @@ Phase 0 の多様化(A/B・family タグ)を活かし、**同じ mover 回路が
 > **削除した旧知見**: 「4D-CC 確信崩壊(Yes→No 反転)は Qwen 特有」は、多様化 CC で精査した結果 **構成特有**(simplex では小型 Qwen、box では 14B/phi-4、intersect では 14B/gemma-2-9b/phi-4 が崩壊、円/接線は頑健)であり、クリーンな「Qwen 特有」ではないと判明。重要度が低いためレポートから除外。
 
 ## 4. 残タスク
-- **Phase 6(gemma-2-9b backup, 任意)**: backup 冗長は 9B 固有(規模依存)。反復/二重ヘッド ablation で backup ヘッドを特定。
 - **Phase 7(数値 operand, 任意・副軸)**: 図形名/パラメータ span patching。
+- (任意) backup 控えヘッドの他セル一般性、gemma-2-27b 後期抑制尾部の copy-suppression 調査(Phase 6 拡張)。
 
 ### 完了済(参考)
 - **全モデル full 再eval**: `results/eval/final_20260701/`(多様化データ `questions_augmented.csv`・**全20モデル単一バッチ**・
