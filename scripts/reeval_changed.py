@@ -1,158 +1,225 @@
 #!/usr/bin/env python
 """Cost-efficient correction of an eval run after the 3-sphere->4-ball dataset fix.
 
-Only the numeric family carries the changed questions ("hyper-volume of a
-3-sphere" -> "... 4-ball"), and they live in BOTH `numeric` and `numeric_mc`
-(4D). So instead of re-running the whole ~9k-question benchmark, this re-runs
-ONLY `numeric,numeric_mc` at dim 4 for each model (via evaluate.py's own
-machinery, so prompting/scoring/rotation are identical), then splices the
-corrected `numeric` / `numeric_mc` rows into each model's existing results.text
-and recomputes the 4D Overall row. The geometry types (1/2/3) are untouched.
+Background
+----------
+"hyper-volume of a 3-sphere with radius R" was ambiguous: mathematically a
+3-sphere is S^3 (surface, 3-volume 2*pi^2*R^3), while the intended answer is the
+enclosed 4-ball (pi^2/2 * R^4). Frontier models (GPT-5) consistently gave the
+S^3 reading and were marked wrong. The dataset now says "hyper-volume of a
+4-ball ..." (surface questions, phrased "hyper-surface volume of a 3-sphere",
+are unchanged).
 
-Two phases (run either or both):
-  --run-eval   re-evaluate numeric,numeric_mc @dim4 -> results/eval/<run>-numfix/<model>/
-  --merge      splice corrected numeric rows into results/eval/<run>/<model>/results.text
+This re-scores an existing run for that fix by re-running ONLY the affected
+rows (the handful of numeric AND numeric_mc questions per model whose saved
+question still says the old phrase) — reusing each row's saved, already
+chat-templated `input` with just the phrase substituted, so the prompt is
+identical except the wording. It updates dim_*_per_question.csv,
+dim_*_{correct,incorrect}.csv and results.text (Conf preserved from the
+per_question `confidence` column; unaffected rows are untouched).
 
-Local models run via vLLM (needs GPU / A100); gpt-5 via Azure (reasoning_effort).
-Big models get tensor-parallel from TP_MAP. numeric_mc is ALWAYS included.
+Requires the per_question CSVs to be present (they are saved on the eval /
+A100 machine even though not committed). Both `numeric` and `numeric_mc` are
+included. Local models run via vLLM (GPU); gpt-5[-minimal] via Azure.
 
-Examples
---------
-  # local models: re-eval numeric subset then merge, in one go
-  python scripts/reeval_changed.py --run results/eval/final_20260701 --run-eval --merge
-  # a subset
-  python scripts/reeval_changed.py --run ... --models Qwen_Qwen3.5-122B-A10B --run-eval --merge
-  # gpt-5 (API): re-eval via Azure (medium) then merge
-  python scripts/reeval_changed.py --run ... --models gpt-5 --run-eval --merge
-
-Follow-up: regenerate confusion matrices / summary with the existing tools.
+Usage
+-----
+  python scripts/reeval_changed.py --run results/eval/final_20260701
+  python scripts/reeval_changed.py --run ... --models Qwen_Qwen3.5-122B-A10B --tp 4
+  python scripts/reeval_changed.py --run ... --models gpt-5 gpt-5-minimal
+Follow-up: python scripts/rebuild_semantic_results.py ; regenerate summary.
 """
-import argparse, csv, glob, os, re, subprocess, sys
+import argparse, csv, glob, os, statistics, sys
 csv.field_size_limit(10 ** 7)
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-TYPES = "numeric,numeric_mc"          # BOTH numeric and numeric_mc are re-run
-DIM = "4"                             # the 4-ball questions are 4D only
-# tensor-parallel per large local model (A100 80GB); default 1
+OLD_PHRASE = "hyper-volume of a 3-sphere"
+NEW_PHRASE = "hyper-volume of a 4-ball"
+NUMTYPES = ("numeric", "numeric_mc")
+TYPE_LABEL = [("1", "PPC (1)"), ("2", "IC (2)"), ("3", "CC (3)"),
+              ("numeric", "numeric"), ("numeric_mc", "numeric_mc")]
 TP_MAP = {"Qwen_Qwen3.5-27B": 2, "Qwen_Qwen3.5-35B-A3B": 2, "Qwen_Qwen3.5-122B-A10B": 4,
           "Qwen_Qwen3-30B-A3B": 2, "Qwen_Qwen3-32B": 2, "Qwen_Qwen3-Next-80B-A3B-Instruct": 4,
-          "google_gemma-4-26B-A4B-it": 2, "google_gemma-4-31B-it": 2,
-          "google_gemma-2-27b-it": 2}
+          "google_gemma-4-26B-A4B-it": 2, "google_gemma-4-31B-it": 2, "google_gemma-2-27b-it": 2}
 API_EFFORT = {"gpt-5": "medium", "gpt-5-minimal": "minimal"}
-NUMTYPES = ("numeric", "numeric_mc")
+TRUE = ("1", "True", "true")
 
 
 def dir_to_model(safe):
     if safe in API_EFFORT or safe.startswith("gpt-"):
-        return ("gpt-5", True)                # azure deployment name
-    return (safe.replace("_", "/", 1), False)
+        return "gpt-5", True
+    return safe.replace("_", "/", 1), False
 
 
-def run_eval(run, safe, py):
-    model_arg, is_api = dir_to_model(safe)
-    numfix_ts = os.path.basename(run) + "-numfix"
-    cmd = [py, "-m", "evaluation.evaluate", "--models", model_arg,
-           "--dims", DIM, "--types", TYPES, "--timestamp", numfix_ts,
-           "--prompt-type", "simple_prompt"]
-    if is_api:
-        cmd += ["--reasoning-effort", API_EFFORT.get(safe, "medium")]
-    else:
-        cmd += ["--tensor-parallel-size", str(TP_MAP.get(safe, 1)), "--dtype", "bfloat16"]
-    # API deployment 'gpt-5' writes to dir 'gpt-5'; for gpt-5-minimal we relocate afterwards
-    print("  $", " ".join(cmd))
-    env = dict(os.environ, HF_HUB_OFFLINE="1")
-    subprocess.run(cmd, cwd=ROOT, env=env, check=True)
-    produced = os.path.join(ROOT, "results/eval", numfix_ts, model_arg.replace("/", "_"))
-    want = os.path.join(ROOT, "results/eval", numfix_ts, safe)
-    if produced != want and os.path.isdir(produced):     # gpt-5 -> gpt-5-minimal
-        os.replace(produced, want)
+def score_row(type_key, response, gt_raw, extract_answer, extract_numeric, norm_label):
+    import re
+    if type_key == "numeric":
+        pred = extract_numeric(response)
+        ok = False
+        if pred is not None:
+            try:
+                ok = int(pred) == int(re.sub(r"[^0-9\-]", "", str(gt_raw)))
+            except Exception:
+                ok = False
+        return (pred or ""), (pred or ""), ok
+    pred = extract_answer(response)
+    true_label = norm_label(gt_raw)
+    plabel = ""
+    if pred is not None:
+        a = pred.strip().upper()
+        if true_label.isdigit():
+            i = ord(a) - ord("A"); plabel = str(i + 1) if 0 <= i < 26 else a
+        else:
+            plabel = a
+    return (pred or ""), plabel, (plabel != "" and true_label == plabel)
 
 
-def numeric_counts(pq_path):
-    """{type: (n, correct, empty)} from a dim_4_per_question.csv (numeric types)."""
-    out = {}
-    if not os.path.exists(pq_path):
-        return out
-    rows = list(csv.DictReader(open(pq_path, encoding="utf-8")))
-    for tk in NUMTYPES:
-        tr = [r for r in rows if r["type"] == tk]
-        if not tr:
+def _mean(vals):
+    vals = [v for v in vals if v is not None]
+    return statistics.mean(vals) if vals else None
+
+
+def _cf(x):
+    try:
+        return float(x)
+    except Exception:
+        return None
+
+
+def regen_results_text(model_disp, run, safe):
+    lines = []
+    for dim in ("2", "3", "4"):
+        p = os.path.join(run, safe, f"dim_{dim}_per_question.csv")
+        if not os.path.exists(p):
             continue
-        n = len(tr)
-        c = sum(1 for r in tr if r["is_correct"] in ("1", "True", "true"))
-        e = sum(1 for r in tr if not (r.get("predicted_normalized") or r.get("predicted_raw")))
-        out[tk] = (n, c, e)
-    return out
+        rows = list(csv.DictReader(open(p, encoding="utf-8")))
+        if not rows:
+            continue
+        lines += ["", "=" * 72, f" {model_disp}   ·   {dim}D", "-" * 72,
+                  f" {'Type':<12} {'N':>6} {'Correct':>8} {'Acc':>8} {'Empty':>7} {'Conf':>7} {'Conf✓':>7} {'Conf✗':>7}",
+                  "-" * 72]
+        tn = tc = 0.0; te = 0.0; allc = []
+        for tk, label in TYPE_LABEL:
+            tr = [r for r in rows if r["type"] == tk]
+            if not tr:
+                continue
+            n = len(tr)
+            c = sum(1 for r in tr if r["is_correct"] in TRUE)
+            e = sum(1 for r in tr if not (r.get("predicted_normalized") or r.get("predicted_raw")))
+            cf = [_cf(r.get("confidence")) for r in tr]
+            cok = [_cf(r["confidence"]) for r in tr if r["is_correct"] in TRUE]
+            cno = [_cf(r["confidence"]) for r in tr if r["is_correct"] not in TRUE]
+            mc, mok, mno = _mean(cf), _mean(cok), _mean(cno)
+            allc += [v for v in cf if v is not None]
+            tn += n; tc += c; te += e
+            fmt = lambda v: f"{v:.3f}" if v is not None else "-"
+            lines.append(f" {label:<12} {n:>6} {c:>8} {100*c/n:>7.2f}% {100*e/n:>6.1f}% {fmt(mc):>7} {fmt(mok):>7} {fmt(mno):>7}")
+        oc = _mean(allc)
+        lines += ["-" * 72,
+                  f" {'Overall':<12} {int(tn):>6} {int(tc):>8} {100*tc/tn:>7.2f}% {100*te/tn:>6.1f}% {(f'{oc:.3f}' if oc is not None else '-'):>7}",
+                  "-" * 72,
+                  " Acc = accuracy   Empty = share with no parseable answer",
+                  " Conf = mean P(model's chosen answer token); Conf✓/Conf✗ = on correct/incorrect",
+                  " (blank/'-' = unavailable for this backend)", "=" * 72]
+    open(os.path.join(run, safe, "results.text"), "w", encoding="utf-8").write("\n".join(lines) + "\n")
 
 
-def merge(run, safe):
-    """Splice corrected numeric/numeric_mc rows into the 4D block of results.text."""
-    numfix = run + "-numfix"
-    new = numeric_counts(os.path.join(numfix, safe, "dim_4_per_question.csv"))
-    if not new:
-        print(f"  [merge] {safe}: no corrected numeric data in {numfix} (run --run-eval first)"); return
-    rt_path = os.path.join(run, safe, "results.text")
-    if not os.path.exists(rt_path):
-        print(f"  [merge] {safe}: no results.text to update"); return
-    lines = open(rt_path, encoding="utf-8").read().splitlines()
-    # locate the 4D block: header line containing '·   4D'
-    blk = next((i for i, l in enumerate(lines) if re.search(r"·\s*4D\s*$", l)), None)
-    if blk is None:
-        print(f"  [merge] {safe}: no 4D block"); return
-    # parse rows in the 4D block: " label  N  Correct  Acc%  Empty% ..."
-    row_re = re.compile(r"^\s*(PPC \(1\)|IC \(2\)|CC \(3\)|numeric|numeric_mc|Overall)\s+(\d+)\s+(\d+)\s+([\d.]+)%\s+([\d.]+)%")
-    counts = {}   # label -> (n, correct, empty_pct) for all rows in this block
-    idx = {}
-    end = None
-    for i in range(blk, min(blk + 40, len(lines))):
-        m = row_re.match(lines[i])
-        if m:
-            counts[m.group(1)] = [int(m.group(2)), int(m.group(3)), float(m.group(5))]
-            idx[m.group(1)] = i
-        if m and m.group(1) == "Overall":
-            end = i; break
-    if "numeric" not in idx and "numeric_mc" not in idx:
-        print(f"  [merge] {safe}: 4D block has no numeric rows"); return
-    # apply new numeric/numeric_mc counts
-    label_of = {"numeric": "numeric", "numeric_mc": "numeric_mc"}
-    for tk, (n, c, e) in new.items():
-        lab = label_of[tk]
-        if lab in idx:
-            emp = 100.0 * e / n if n else 0.0
-            counts[lab] = [n, c, emp]
-            lines[idx[lab]] = f" {lab:<12} {n:>6} {c:>8} {100*c/n:>7.2f}% {emp:>6.1f}%   {'-':>5}   {'-':>5}   {'-':>5}"
-    # recompute Overall from all non-Overall rows in the block
-    tot_n = sum(v[0] for k, v in counts.items() if k != "Overall")
-    tot_c = sum(v[1] for k, v in counts.items() if k != "Overall")
-    tot_e = sum(v[0] * v[2] / 100.0 for k, v in counts.items() if k != "Overall")
-    if "Overall" in idx:
-        lines[idx["Overall"]] = f" {'Overall':<12} {tot_n:>6} {tot_c:>8} {100*tot_c/tot_n:>7.2f}% {100*tot_e/tot_n:>6.1f}%   {'-':>5}"
-    open(rt_path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
-    print(f"  [merge] {safe}: 4D numeric/numeric_mc updated, Overall -> {100*tot_c/tot_n:.2f}%")
+def rewrite_splits(run, safe, dim, rows):
+    d = os.path.join(run, safe); fields = list(rows[0].keys())
+    for name, want in [("per_question", None), ("correct", True), ("incorrect", False)]:
+        sel = rows if want is None else [r for r in rows if (r["is_correct"] in TRUE) == want]
+        with open(os.path.join(d, f"dim_{dim}_{name}.csv"), "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(sel)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", default="results/eval/final_20260701")
-    ap.add_argument("--models", nargs="*", default=None, help="model dir names (default: all)")
-    ap.add_argument("--run-eval", action="store_true", help="re-evaluate numeric,numeric_mc @dim4")
-    ap.add_argument("--merge", action="store_true", help="splice corrected numeric rows into results.text")
-    ap.add_argument("--python", default=sys.executable)
+    ap.add_argument("--models", nargs="*", default=None)
+    ap.add_argument("--tp", type=int, default=None, help="override tensor_parallel_size")
+    ap.add_argument("--dtype", default="bfloat16")
+    ap.add_argument("--max-new-tokens", type=int, default=16)
+    ap.add_argument("--gpu-mem", type=float, default=0.85)
+    ap.add_argument("--rebuild", action="store_true",
+                    help="after updating, run rebuild_semantic_results.py (confusion matrices + semantic_accuracy.json)")
     args = ap.parse_args()
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    from evaluation.evaluate import (chat, extract_answer, extract_numeric,
+                                     _normalize_label, _answer_confidence)
+    from common.prompting import set_reasoning_effort
+
     run = args.run.rstrip("/")
     safes = args.models or sorted(os.path.basename(d) for d in glob.glob(os.path.join(run, "*")) if os.path.isdir(d))
-    if not (args.run_eval or args.merge):
-        print("Nothing to do: pass --run-eval and/or --merge"); return
     for safe in safes:
-        print(f"[{safe}]")
-        try:
-            if args.run_eval:
-                run_eval(run, safe, args.python)
-            if args.merge:
-                merge(run, safe)
-        except subprocess.CalledProcessError as e:
-            print(f"  [error] {safe}: eval failed ({e}); skipping")
-    print("\nDone. Optional: python scripts/rebuild_semantic_results.py ; regenerate summary.")
+        model_name, is_api = dir_to_model(safe)
+        affected = {}
+        for dim in ("2", "3", "4"):
+            p = os.path.join(run, safe, f"dim_{dim}_per_question.csv")
+            if not os.path.exists(p):
+                continue
+            rows = list(csv.DictReader(open(p, encoding="utf-8")))
+            idx = [i for i, r in enumerate(rows)
+                   if r["type"] in NUMTYPES and OLD_PHRASE in r.get("question", "")]
+            if idx:
+                affected[dim] = (rows, idx)
+        naff = sum(len(v[1]) for v in affected.values())
+        if not naff:
+            print(f"[skip] {safe}: no affected rows (per_question present? "
+                  f"{os.path.exists(os.path.join(run, safe, 'dim_4_per_question.csv'))})")
+            continue
+        print(f"[{safe}] model={model_name} api={is_api} affected={naff} (numeric+numeric_mc)")
+
+        llm = None
+        if is_api:
+            set_reasoning_effort(API_EFFORT.get(safe, "medium"))
+        else:
+            from vllm import LLM
+            tp = args.tp or TP_MAP.get(safe, 1)
+            for dt in ([args.dtype, "float32"] if args.dtype != "float32" else ["float32"]):
+                try:
+                    llm = LLM(model=model_name, dtype=dt, gpu_memory_utilization=args.gpu_mem,
+                              tensor_parallel_size=tp, disable_log_stats=True)
+                    break
+                except Exception as e:
+                    print(f"   vLLM dtype={dt} tp={tp} failed: {str(e)[:100]}")
+            if llm is None:
+                print(f"[warn] {safe}: could not load; skip"); continue
+
+        for dim, (rows, idx) in affected.items():
+            prompts = [rows[i]["input"].replace(OLD_PHRASE, NEW_PHRASE) for i in idx]
+            if is_api:
+                resp, lps = chat(prompts, model_name=model_name)
+            else:
+                resp, lps = chat(prompts, model=llm, do_sample=False,
+                                 max_new_tokens=args.max_new_tokens, repetition_penalty=1.0)
+            for j, i in enumerate(idx):
+                r = rows[i]
+                r["question"] = r["question"].replace(OLD_PHRASE, NEW_PHRASE)
+                r["input"] = prompts[j]
+                r["response"] = resp[j]
+                praw, pnorm, ok = score_row(r["type"], resp[j], r["ground_truth_raw"],
+                                            extract_answer, extract_numeric, _normalize_label)
+                r["predicted_raw"] = praw; r["predicted_normalized"] = pnorm
+                r["is_correct"] = "1" if ok else "0"
+                conf = _answer_confidence(lps[j] if lps else None,
+                                          praw if r["type"] == "numeric" else pnorm,
+                                          is_numeric=(r["type"] == "numeric"))
+                r["confidence"] = "" if conf is None else f"{conf:.6f}"
+            rewrite_splits(run, safe, dim, rows)
+        regen_results_text(model_name, run, safe)
+        print(f"[done] {safe}: per_question / correct / incorrect / results.text updated")
+        del llm
+
+    print("\nUpdated per model: dim_4_per_question.csv, dim_4_correct/incorrect.csv, results.text.")
+    print("Unaffected (numeric has no confusion matrix; types 1/2/3 only): confusion_matrix_*.png, semantic_accuracy.json.")
+    if args.rebuild:
+        import subprocess
+        print("Running rebuild_semantic_results.py ...")
+        subprocess.run([sys.executable, "scripts/rebuild_semantic_results.py"],
+                       cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    else:
+        print("Optional: python scripts/rebuild_semantic_results.py   (or pass --rebuild)")
+    print("STILL TO DO (run-level aggregate): regenerate summary.md — every model's numeric acc changed.")
 
 
 if __name__ == "__main__":
