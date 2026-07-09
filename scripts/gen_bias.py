@@ -11,9 +11,13 @@ import csv, os, glob
 csv.field_size_limit(10**7)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASE = os.environ.get("EVAL_BASE", "results/eval/final_greedy_20260626")
+BASE = os.environ.get("EVAL_BASE", "results/eval/final_20260701")
 SUMMARY = os.path.join(ROOT, BASE, "summary.md")
 
+# final_20260701: all models evaluated in a single batch / single directory
+# (no split patch_candidates_* dirs). per_question CSVs are needed and are now
+# tracked on the remote (.gitignore relaxed). Patching-target models are grouped
+# at the end after a single separator row.
 MAIN_MODELS = [
  ("Qwen3.5-2B",                 f"{BASE}/Qwen_Qwen3.5-2B"),
  ("Qwen3.5-4B",                 f"{BASE}/Qwen_Qwen3.5-4B"),
@@ -30,29 +34,21 @@ MAIN_MODELS = [
  ("gemma-4-31B-it",             f"{BASE}/google_gemma-4-31B-it"),
  ("Olmo-3-7B-Instruct",         f"{BASE}/allenai_Olmo-3-7B-Instruct"),
  ("Olmo-3-7B-RL-Zero-Math",     f"{BASE}/allenai_Olmo-3-7B-RL-Zero-Math"),
+ ("gpt-5",                      f"{BASE}/gpt-5"),
+ ("gpt-5-minimal",             f"{BASE}/gpt-5-minimal"),
 ]
 
-# Activation-patching 候補（標準 GQA Attention・別バッチ eval、設定は同一）。
-PATCH_BASE_A = "results/eval/patch_candidates_20260629"
-PATCH_BASE_Q = "results/eval/patch_candidates_qwen3_20260630"
+# Activation-patching ターゲット5モデル（同一バッチ・同一データ・同一設定）。
 PATCH_MODELS = [
- ("Qwen3-8B",             f"{PATCH_BASE_Q}/Qwen_Qwen3-8B"),
- ("Qwen3-14B",            f"{PATCH_BASE_Q}/Qwen_Qwen3-14B"),
- ("Qwen2.5-7B-Instruct",  f"{PATCH_BASE_A}/Qwen_Qwen2.5-7B-Instruct"),
- ("gemma-2-9b-it",        f"{PATCH_BASE_A}/google_gemma-2-9b-it"),
- ("Llama-3.1-8B-Instruct",f"{PATCH_BASE_A}/meta-llama_Llama-3.1-8B-Instruct"),
+ ("Qwen3-8B",      f"{BASE}/Qwen_Qwen3-8B"),
+ ("Qwen3-14B",     f"{BASE}/Qwen_Qwen3-14B"),
+ ("gemma-2-9b-it", f"{BASE}/google_gemma-2-9b-it"),
+ ("gemma-2-27b-it",f"{BASE}/google_gemma-2-27b-it"),
+ ("phi-4",         f"{BASE}/microsoft_phi-4"),
 ]
 PATCH_HEAD = PATCH_MODELS[0][0]
-PATCH_BASE_O = "results/eval/patch_candidates_others_20260630"
-PATCH2_MODELS = [
- ("phi-4",            f"{PATCH_BASE_O}/microsoft_phi-4"),
- ("gemma-3-12b-it",   f"{PATCH_BASE_O}/google_gemma-3-12b-it"),
- ("gemma-2-27b-it",   f"{PATCH_BASE_O}/google_gemma-2-27b-it"),
- ("Nemotron-Nano-8B", f"{PATCH_BASE_O}/nvidia_Llama-3.1-Nemotron-Nano-8B-v1"),
- ("gpt-oss-20B",      f"{PATCH_BASE_O}/openai_gpt-oss-20b"),
-]
-PATCH2_HEAD = PATCH2_MODELS[0][0]
-MODELS = MAIN_MODELS + PATCH_MODELS + PATCH2_MODELS
+PATCH2_HEAD = "\0"  # single-batch run: no second separator row
+MODELS = MAIN_MODELS + PATCH_MODELS
 
 
 def li(s):
@@ -110,7 +106,7 @@ L.append("| モデル | A acc/conf | B | C | D | A→C acc差 | A→C conf差 |"
 L.append("|---|---|---|---|---|---|---|")
 for name, _ in MODELS:
     if name == PATCH_HEAD:
-        L.append("| **— patching候補 round1（標準Attn・別バッチeval）—** | | | | | | |")
+        L.append("| **— activation-patching ターゲット（同一バッチ・同一データ）—** | | | | | | |")
     if name == PATCH2_HEAD:
         L.append("| **— patching候補 round2（非Qwen/推論系・別バッチeval）—** | | | | | | |")
     slot, _ch = res[name]
@@ -127,7 +123,7 @@ L.append("| モデル | A conf(n) | B | C | D |")
 L.append("|---|---|---|---|---|")
 for name, _ in MODELS:
     if name == PATCH_HEAD:
-        L.append("| **— patching候補 round1（標準Attn・別バッチeval）—** | | | | |")
+        L.append("| **— activation-patching ターゲット（同一バッチ・同一データ）—** | | | | |")
     if name == PATCH2_HEAD:
         L.append("| **— patching候補 round2（非Qwen/推論系・別バッチeval）—** | | | | |")
     _slot, ch = res[name]
