@@ -171,6 +171,63 @@ def process_pair(
     }
 
 
+@torch.no_grad()
+def process_batch(model, batch, layers, directions, pos_modes, margin) -> List[Dict]:
+    """Batched equivalent of process_pair over a group of equal-length pairs
+    (numerically identical; one forward per (layer, position-mode) for the group).
+    Imports batching helpers lazily so the per-pair path has no new dependency."""
+    from patch_batch import batched_logit_diff_last, make_batched_resid_patch_hook
+    clean, corr = batch["clean"], batch["corr"]
+    id_clean, id_corr, pairs = batch["id_clean"], batch["id_corr"], batch["pairs"]
+    B, L = clean.shape
+
+    pos_by_mode: Dict[str, List[List[int]]] = {m: [] for m in pos_modes}
+    for p in pairs:
+        sets = _position_sets(p, L, pos_modes)
+        for m in pos_modes:
+            pos_by_mode[m].append(sets.get(m, []))
+
+    resid_hooks = [f"blocks.{Lyr}.hook_resid_post" for Lyr in layers]
+    clean_cache = _run_with_cache_resid(model, clean, resid_hooks)
+    corr_cache = _run_with_cache_resid(model, corr, resid_hooks)
+    ld_clean = batched_logit_diff_last(model(clean), id_clean, id_corr)
+    ld_corr = batched_logit_diff_last(model(corr), id_clean, id_corr)
+    correct = [(lc > margin) and (lr < -margin) for lc, lr in zip(ld_clean, ld_corr)]
+    denom = [lc - lr for lc, lr in zip(ld_clean, ld_corr)]
+
+    eff: List[Dict[str, List[float]]] = [{} for _ in range(B)]
+    for direction in directions:
+        base_toks = corr if direction == "denoise" else clean
+        donor_cache = clean_cache if direction == "denoise" else corr_cache
+        for pmode in pos_modes:
+            per_ex = pos_by_mode[pmode]
+            curves = [[] for _ in range(B)]
+            for Lyr in layers:
+                hk = f"blocks.{Lyr}.hook_resid_post"
+                donor = donor_cache[hk]
+                logits = model.run_with_hooks(
+                    base_toks, fwd_hooks=[(hk, make_batched_resid_patch_hook(donor, per_ex))])
+                ld = batched_logit_diff_last(logits, id_clean, id_corr)
+                for b in range(B):
+                    if abs(denom[b]) < 1e-6:
+                        curves[b].append(0.0)
+                    elif direction == "denoise":
+                        curves[b].append((ld[b] - ld_corr[b]) / denom[b])
+                    else:
+                        curves[b].append((ld[b] - ld_clean[b]) / (ld_corr[b] - ld_clean[b]))
+            for b in range(B):
+                eff[b][f"{direction}:{pmode}"] = curves[b]
+
+    results = []
+    for b in range(B):
+        base = {"dimension": pairs[b]["dimension"], "type_key": pairs[b]["type_key"],
+                "source": pairs[b].get("source", ""), "family": pairs[b].get("family", "other"),
+                "ld_clean": ld_clean[b], "ld_corr": ld_corr[b]}
+        ok = correct[b] and abs(denom[b]) >= 1e-6
+        results.append({**base, "baseline_ok": ok, "effects": (eff[b] if ok else {})})
+    return results
+
+
 def _curve_stats(curves: List[List[float]]) -> Dict:
     t = torch.tensor(curves)  # [n_pairs, n_layers]
     std = t.std(0).tolist() if t.shape[0] > 1 else [0.0] * t.shape[1]
@@ -279,6 +336,9 @@ def main() -> None:
                     help="total number of GPU shards (for multi-GPU runs)")
     ap.add_argument("--shard-id", type=int, default=0,
                     help="index of this shard [0, num-shards)")
+    ap.add_argument("--batch-size", type=int, default=8,
+                    help="batch pairs of equal token length (1 = per-pair). Numerically identical; "
+                         "~mean-group-size faster. Lower if OOM (esp. --positions all).")
     args = ap.parse_args()
 
     directions = [d.strip() for d in args.directions.split(",") if d.strip()]
@@ -331,13 +391,23 @@ def main() -> None:
     results: List[Dict] = []
     n_ok = 0
     from tqdm.auto import tqdm
-    for p in tqdm(pairs, desc="pairs", unit="pair"):
-        r = process_pair(model, p, layers, directions, pos_modes, args.margin)
-        if r is None:
-            continue
-        results.append(r)
-        if r.get("baseline_ok"):
-            n_ok += 1
+    if args.batch_size and args.batch_size > 1:
+        from patch_batch import group_by_length
+        batches = group_by_length(pairs, model.tokenizer, max_batch=args.batch_size, device=model.cfg.device)
+        print(f"Batched: {len(pairs)} pairs -> {len(batches)} equal-length batches "
+              f"(mean {len(pairs)/max(1,len(batches)):.1f}/batch)")
+        for batch in tqdm(batches, desc="batches", unit="batch"):
+            rs = process_batch(model, batch, layers, directions, pos_modes, args.margin)
+            results.extend(rs)
+            n_ok += sum(int(bool(r.get("baseline_ok"))) for r in rs)
+    else:
+        for p in tqdm(pairs, desc="pairs", unit="pair"):
+            r = process_pair(model, p, layers, directions, pos_modes, args.margin)
+            if r is None:
+                continue
+            results.append(r)
+            if r.get("baseline_ok"):
+                n_ok += 1
     print(f"baseline-correct pairs: {n_ok}/{len(results)}")
 
     agg = _aggregate(results)

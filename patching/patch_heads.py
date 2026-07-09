@@ -42,6 +42,11 @@ from patch_run import (  # reuse Phase-1 helpers unchanged
     _position_sets,
     _run_with_cache_resid,
 )
+from patch_batch import (  # length-grouped batching (numerically identical to per-pair)
+    batched_logit_diff_last,
+    make_batched_head_patch_hook,
+    group_by_length,
+)
 
 _Z_CANDIDATES = ["blocks.{L}.attn.hook_z"]
 
@@ -119,6 +124,73 @@ def process_pair(model, pair, z_tmpl, layers, n_heads, directions, pos_modes, ma
     return {**base, "baseline_ok": True, "effects": effects}
 
 
+@torch.no_grad()
+def process_batch(model, batch, z_tmpl, layers, n_heads, directions, pos_modes, margin) -> List[Dict]:
+    """Batched equivalent of process_pair over a group of equal-length pairs.
+
+    Numerically identical to per-pair (no padding; causal attention is batch-
+    independent), but runs one forward per (layer, head) for the whole group
+    instead of per pair — ~mean-group-size fewer forwards.
+    """
+    clean, corr = batch["clean"], batch["corr"]           # [B, L]
+    id_clean, id_corr, pairs = batch["id_clean"], batch["id_corr"], batch["pairs"]
+    B, L = clean.shape
+
+    # per-example position lists for each requested mode
+    pos_by_mode: Dict[str, List[List[int]]] = {m: [] for m in pos_modes}
+    for p in pairs:
+        sets = _position_sets(p, L, pos_modes)
+        for m in pos_modes:
+            pos_by_mode[m].append(sets.get(m, []))
+
+    ld_clean = batched_logit_diff_last(model(clean), id_clean, id_corr)
+    ld_corr = batched_logit_diff_last(model(corr), id_clean, id_corr)
+    correct = [(lc > margin) and (lr < -margin) for lc, lr in zip(ld_clean, ld_corr)]
+    denom = [lc - lr for lc, lr in zip(ld_clean, ld_corr)]
+
+    hook_names = [z_tmpl.format(L=Lyr) for Lyr in layers]
+    clean_cache = _run_with_cache_resid(model, clean, hook_names)
+    corr_cache = _run_with_cache_resid(model, corr, hook_names)
+
+    # effects[b][key] = [layer][head]
+    eff: List[Dict[str, List[List[float]]]] = [{} for _ in range(B)]
+    for direction in directions:
+        base_toks = corr if direction == "denoise" else clean
+        donor_cache = clean_cache if direction == "denoise" else corr_cache
+        for pmode in pos_modes:
+            per_ex = pos_by_mode[pmode]
+            grids = [[] for _ in range(B)]  # per example: list of rows (per layer)
+            for Lyr in layers:
+                hk = z_tmpl.format(L=Lyr)
+                donor = donor_cache[hk]
+                rows = [[] for _ in range(B)]
+                for h in range(n_heads):
+                    logits = model.run_with_hooks(
+                        base_toks, fwd_hooks=[(hk, make_batched_head_patch_hook(donor, per_ex, h))])
+                    ld = batched_logit_diff_last(logits, id_clean, id_corr)
+                    for b in range(B):
+                        if abs(denom[b]) < 1e-6:
+                            rows[b].append(0.0)
+                        elif direction == "denoise":
+                            rows[b].append((ld[b] - ld_corr[b]) / denom[b])
+                        else:
+                            rows[b].append((ld[b] - ld_clean[b]) / (ld_corr[b] - ld_clean[b]))
+                for b in range(B):
+                    grids[b].append(rows[b])
+            for b in range(B):
+                eff[b][f"{direction}:{pmode}"] = grids[b]
+
+    results = []
+    for b in range(B):
+        base = {"dimension": pairs[b]["dimension"], "type_key": pairs[b]["type_key"],
+                "source": pairs[b].get("source", ""), "ld_clean": ld_clean[b], "ld_corr": ld_corr[b]}
+        if not correct[b] or abs(denom[b]) < 1e-6:
+            results.append({**base, "baseline_ok": False, "effects": {}})
+        else:
+            results.append({**base, "baseline_ok": True, "effects": eff[b]})
+    return results
+
+
 def _aggregate_heads(results, layers, n_heads):
     """Mean per (layer, head) over baseline-ok pairs, plus by_dim breakdown."""
     ok = [r for r in results if r.get("baseline_ok") and r.get("effects")]
@@ -187,6 +259,9 @@ def main() -> None:
     ap.add_argument("--layers", default="all", help="'all' or comma-separated layer indices (window around attn·last peak)")
     ap.add_argument("--limit", type=int, default=0, help="first N pairs per dimension (smoke test)")
     ap.add_argument("--margin", type=float, default=0.0)
+    ap.add_argument("--batch-size", type=int, default=16,
+                    help="batch pairs of equal token length (1 = per-pair). Numerically identical; "
+                         "~mean-group-size (≈8-11x) faster. Lower if OOM (esp. --layers all on 27B).")
     ap.add_argument("--out", default="results/patching/heads/qwen3_8b")
     args = ap.parse_args()
 
@@ -224,12 +299,21 @@ def main() -> None:
     from tqdm.auto import tqdm
     results: List[Dict] = []
     n_ok = 0
-    for p in tqdm(pairs, desc="pairs", unit="pair"):
-        r = process_pair(model, p, z_tmpl, layers, n_heads, directions, pos_modes, args.margin)
-        if r is None:
-            continue
-        results.append(r)
-        n_ok += int(bool(r.get("baseline_ok")))
+    if args.batch_size and args.batch_size > 1:
+        batches = group_by_length(pairs, model.tokenizer, max_batch=args.batch_size, device=model.cfg.device)
+        print(f"Batched: {len(pairs)} pairs -> {len(batches)} equal-length batches "
+              f"(mean {len(pairs)/max(1,len(batches)):.1f}/batch)")
+        for batch in tqdm(batches, desc="batches", unit="batch"):
+            rs = process_batch(model, batch, z_tmpl, layers, n_heads, directions, pos_modes, args.margin)
+            results.extend(rs)
+            n_ok += sum(int(bool(r.get("baseline_ok"))) for r in rs)
+    else:
+        for p in tqdm(pairs, desc="pairs", unit="pair"):
+            r = process_pair(model, p, z_tmpl, layers, n_heads, directions, pos_modes, args.margin)
+            if r is None:
+                continue
+            results.append(r)
+            n_ok += int(bool(r.get("baseline_ok")))
     print(f"baseline-correct pairs: {n_ok}/{len(results)}")
 
     os.makedirs(args.out, exist_ok=True)

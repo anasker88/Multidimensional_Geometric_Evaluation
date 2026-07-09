@@ -14,7 +14,7 @@
 |---|---|---|
 | P1-1 レター counterbalance | 🟢 | `patch_pairs.py --counterbalance`(rotation で clean 答えを非A化) |
 | P1-2 mean/resample ablation | 🟢 | `patch_ablate.py --ablation {zero,mean,resample}` |
-| P1-3 中間位置・全ヘッド窓 | 🟢 | 既存 `patch_heads.py --layers all` / `patch_run.py --positions edit,last`(全位置版は要拡張、下記) |
+| P1-3 中間位置・全ヘッド窓 | 🟢 | `patch_heads.py --layers all` / `patch_run.py --positions all`(全位置スイープ対応済)。バッチ化で現実的な時間に |
 | P1-4 解けない事例トレース | ⬜ | 未実装(設計のみ) |
 | P2-1 top-k 同時 denoise patch | 🟢 | 新規 `patch_joint.py` |
 | P2-2 random 多 seed | 🟢 | `patch_ablate.py --rand-seeds`(+ per-pair `rand{k}_std` 出力) |
@@ -26,6 +26,22 @@
 を全5モデルで算出。cosine は SB 天井を **わずかに下回る**(Qwen3-8B 系統残差 ~0.015、gemma-2-9b ~0.046)=
 「ほぼ不変+小さな系統残差」を定量確認。**gemma-2-27b は 4D 信頼性が低く**(200分割 raw 0.47 / SB 0.64。
 アーティファクト旧値の単一偶奇分割 0.36 は不安定だった)**信号不足で判定不能** — C5(単一分割の不安定性)を実証。
+
+## バッチ化(高速化・実行時間短縮)
+
+`patch_batch.py`(新規)で **同一トークン長のペアをグループ化してバッチ実行**。パディング不要=
+標準の causal attention はバッチ次元で独立なので **batch=1 と数値的に完全一致**(attention-mask / RoPE 位置の
+ハザードなし)。速度向上 ≈ 平均グループサイズ(テンプレ化された幾何プロンプトで実測 **~8–11倍**、
+Qwen3-8B 335ペア→42長・平均8.0、gemma-2-27b 425→39長・平均10.9)。
+
+対応済スクリプト(`--batch-size` フラグ、既定 8〜16、OOM 時は下げる。`--batch-size 1` で従来の逐次パスに一致):
+- `patch_run.py`(resid 位置スイープ)・`patch_heads.py`(ヘッド)・`patch_components.py`(成分)——スイープが重い3本。
+- インデックス/gather の正しさは `python patching/patch_batch.py` の CPU セルフテストで検証(batched == per-example)。
+- `patch_ablate.py` / `patch_joint.py` は元々前向き回数が少ない(~7–30/ペア)ため逐次のまま(必要なら同パターンで追加可能)。
+
+**P1-3(全位置・全層スイープ)はバッチ化で現実的に**: 例えば `patch_run.py --positions all --batch-size 8`、
+`patch_heads.py --layers all --batch-size 8`。逐次では 8B で ~数十時間だった全位置スイープが ~1/8 に。
+代表 Qwen3-8B なら数時間オーダー、27b でも 1 日以内が目安(バッチサイズと GPU メモリ次第)。
 
 ---
 
