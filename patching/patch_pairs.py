@@ -33,7 +33,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import csv
 
-from common.prompting import apply_chat_template, make_prompt_mc, resolve_prompt_key
+from common.prompting import (
+    apply_chat_template,
+    make_prompt_mc,
+    resolve_prompt_key,
+    remap_answer_for_rotation,
+    _choice_count_for_type,
+)
 
 # A geometric reference label is a short run of uppercase letters: a single
 # vertex (E), a line (EF), plane (GHI) or 3D-hyperplane (BEHL). The corrupted
@@ -74,6 +80,7 @@ class Pair:
     corrupted_row_index: int
     source: str = "questions_augmented"   # or "synthetic_2d"
     family: str = "other"                 # construction family (for balancing/stratified analysis)
+    rotation: int = 0                     # option-list left-rotation applied (0 = canonical, clean=A)
 
 
 # Construction families, matched against the clean question text. Ordered: the
@@ -204,7 +211,21 @@ def build_pairs(
     model_name: str,
     tokenizer,
     max_edit_tokens: int,
+    rotations: Optional[List[int]] = None,
 ) -> List[Pair]:
+    """Build clean/corrupted minimal pairs.
+
+    `rotations` = option-list left-rotations to emit per pair (default [0], the
+    canonical clean=A layout). Passing e.g. [0, 1] emits each pair twice, once
+    canonical and once with the options cyclically rotated so the clean answer
+    lands on a non-A letter — this counterbalances the answer LETTER against the
+    relation (REEXPERIMENT_TODO P1-1). Rotation shifts the option block identically
+    in clean and corrupted prompts, so the question-edit token alignment is
+    preserved; only the stored clean_answer/corrupted_answer letters change (via
+    remap_answer_for_rotation). Same rotation is applied to both halves of a pair.
+    """
+    if rotations is None:
+        rotations = [0]
     # group by (dimension, type) so options and answer semantics match within a pair
     groups: Dict[Tuple[int, str], List[QRow]] = {}
     for r in rows:
@@ -213,6 +234,7 @@ def build_pairs(
     pairs: List[Pair] = []
     seen_prompt_pairs = set()
     for (dim, type_key), grp in groups.items():
+        nch = _choice_count_for_type(type_key)
         for i in range(len(grp)):
             for j in range(i + 1, len(grp)):
                 a, b = grp[i], grp[j]
@@ -230,48 +252,57 @@ def build_pairs(
                     clean, corr = b, a
                     clean_edit, corr_edit = edit_b, edit_a
 
-                clean_prompt = apply_chat_template(
-                    make_prompt_mc(clean.question, type_key, reasoning=prompt_key, rotation=0),
-                    model_name,
-                )
-                corr_prompt = apply_chat_template(
-                    make_prompt_mc(corr.question, type_key, reasoning=prompt_key, rotation=0),
-                    model_name,
-                )
-                key = (clean_prompt, corr_prompt)
-                if key in seen_prompt_pairs:
-                    continue
-                seen_prompt_pairs.add(key)
-
-                edit_start = edit_end = n_tokens = None
-                token_aligned: Optional[bool] = None
-                if tokenizer is not None:
-                    aligned = _token_align(tokenizer, clean_prompt, corr_prompt, max_edit_tokens)
-                    token_aligned = aligned is not None
-                    if aligned is not None:
-                        edit_start, edit_end, n_tokens = aligned
-
-                pairs.append(
-                    Pair(
-                        dimension=dim,
-                        type_key=type_key,
-                        clean_answer=clean.answer,
-                        corrupted_answer=corr.answer,
-                        clean_question=clean.question,
-                        corrupted_question=corr.question,
-                        clean_edit=clean_edit,
-                        corrupted_edit=corr_edit,
-                        clean_prompt=clean_prompt,
-                        corrupted_prompt=corr_prompt,
-                        edit_token_start=edit_start,
-                        edit_token_end=edit_end,
-                        n_tokens=n_tokens,
-                        token_aligned=token_aligned,
-                        clean_row_index=clean.row_index,
-                        corrupted_row_index=corr.row_index,
-                        family=_classify_family(clean.question),
+                for rot in rotations:
+                    # skip rotations that don't move any option (nch<=1) except 0
+                    if rot != 0 and nch <= 1:
+                        continue
+                    clean_prompt = apply_chat_template(
+                        make_prompt_mc(clean.question, type_key, reasoning=prompt_key, rotation=rot),
+                        model_name,
                     )
-                )
+                    corr_prompt = apply_chat_template(
+                        make_prompt_mc(corr.question, type_key, reasoning=prompt_key, rotation=rot),
+                        model_name,
+                    )
+                    key = (clean_prompt, corr_prompt)
+                    if key in seen_prompt_pairs:
+                        continue
+                    seen_prompt_pairs.add(key)
+
+                    # answer letters after the rotation (canonical letters are A/B at rot 0)
+                    clean_letter = remap_answer_for_rotation(clean.answer, rot, nch) if nch else clean.answer
+                    corr_letter = remap_answer_for_rotation(corr.answer, rot, nch) if nch else corr.answer
+
+                    edit_start = edit_end = n_tokens = None
+                    token_aligned: Optional[bool] = None
+                    if tokenizer is not None:
+                        aligned = _token_align(tokenizer, clean_prompt, corr_prompt, max_edit_tokens)
+                        token_aligned = aligned is not None
+                        if aligned is not None:
+                            edit_start, edit_end, n_tokens = aligned
+
+                    pairs.append(
+                        Pair(
+                            dimension=dim,
+                            type_key=type_key,
+                            clean_answer=clean_letter,
+                            corrupted_answer=corr_letter,
+                            clean_question=clean.question,
+                            corrupted_question=corr.question,
+                            clean_edit=clean_edit,
+                            corrupted_edit=corr_edit,
+                            clean_prompt=clean_prompt,
+                            corrupted_prompt=corr_prompt,
+                            edit_token_start=edit_start,
+                            edit_token_end=edit_end,
+                            n_tokens=n_tokens,
+                            token_aligned=token_aligned,
+                            clean_row_index=clean.row_index,
+                            corrupted_row_index=corr.row_index,
+                            family=_classify_family(clean.question),
+                            rotation=rot,
+                        )
+                    )
     return pairs
 
 
@@ -525,16 +556,30 @@ def main() -> None:
     ap.add_argument("--out", default="results/patching/pairs/pairs.json")
     ap.add_argument("--aligned-only", action="store_true",
                     help="write only token-aligned pairs (recommended for Phase 1)")
+    ap.add_argument("--counterbalance", action="store_true",
+                    help="emit each pair at rotation 0 AND rotation 1 to balance the answer "
+                         "LETTER against the relation (P1-1: decorrelate 'output-A' from 'relation')")
+    ap.add_argument("--rotations", default="",
+                    help="explicit comma-separated rotations to emit per pair (overrides "
+                         "--counterbalance), e.g. '0,1,2,3' for a full cyclic sweep")
     args = ap.parse_args()
 
     dims = [int(d.strip()) for d in args.dims.split(",") if d.strip()]
     prompt_key = resolve_prompt_key(args.prompt_type)
+    if args.rotations.strip():
+        rotations = [int(x) for x in args.rotations.split(",") if x.strip() != ""]
+    elif args.counterbalance:
+        rotations = [0, 1]
+    else:
+        rotations = [0]
 
     rows = _read_rows(args.questions_csv, dims)
     print(f"Loaded {len(rows)} dimension-rows from {args.questions_csv} (dims={dims})")
+    print(f"Rotations per pair: {rotations}"
+          + ("  (counterbalanced A/B)" if rotations != [0] else ""))
 
     tokenizer = _load_tokenizer(args.model_name)
-    pairs = build_pairs(rows, prompt_key, args.model_name, tokenizer, args.max_edit_tokens)
+    pairs = build_pairs(rows, prompt_key, args.model_name, tokenizer, args.max_edit_tokens, rotations)
 
     if args.balance > 0:
         existing_keys = {(p.clean_prompt, p.corrupted_prompt) for p in pairs}
