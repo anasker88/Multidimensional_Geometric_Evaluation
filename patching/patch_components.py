@@ -111,6 +111,7 @@ def process_pair(
     correct = (ld_clean > margin) and (ld_corr < -margin)
     denom = ld_clean - ld_corr
     base = {"dimension": pair["dimension"], "type_key": pair["type_key"],
+            "clean_answer": pair["clean_answer"],
             "source": pair["source"], "ld_clean": ld_clean, "ld_corr": ld_corr}
     if not correct or abs(denom) < 1e-6:
         return {**base, "baseline_ok": False, "effects": {}}
@@ -187,6 +188,7 @@ def process_batch(model, batch, components, hooks_by_comp, layers_by_comp,
     results = []
     for b in range(B):
         base = {"dimension": pairs[b]["dimension"], "type_key": pairs[b]["type_key"],
+                "clean_answer": pairs[b]["clean_answer"],
                 "source": pairs[b].get("source", ""), "ld_clean": ld_clean[b], "ld_corr": ld_corr[b]}
         ok = correct[b] and abs(denom[b]) >= 1e-6
         results.append({**base, "baseline_ok": ok, "effects": (eff[b] if ok else {})})

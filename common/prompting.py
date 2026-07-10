@@ -149,13 +149,37 @@ def derive_choices_text(opt: str) -> str:
     return ", ".join(letters) if letters else "A, B, C, D, E"
 
 
+def remap_answer_for_perm(answer: str, perm: list[int]) -> str:
+    """Remap an answer letter after reordering the options by `perm`.
+
+    `perm` is the new-position -> old-index map used by make_prompt_mc (the new
+    options list is [base[perm[0]], base[perm[1]], ...]). An answer at old index
+    `o` therefore lands at new position `perm.index(o)`. E.g. perm=[1,0,2,3]
+    (swap A/B) maps A->B and B->A, C/D unchanged."""
+    if not answer or not perm:
+        return answer
+    letter = answer.strip().upper()
+    if not letter.isalpha():
+        return answer
+    idx = ord(letter) - ord("A")
+    if idx not in perm:
+        return answer
+    return chr(ord("A") + perm.index(idx))
+
+
 def make_prompt_mc(
     question: str,
     type_key: str,
     reasoning: bool | str = True,
     rotation: int = 0,
+    perm: list[int] | None = None,
 ) -> str:
-    """Build a multiple-choice prompt for the given type."""
+    """Build a multiple-choice prompt for the given type.
+
+    `perm` (optional) is an explicit new-position -> old-index reordering of the
+    options (e.g. [1,0,2,3] transposes A/B); it takes precedence over the cyclic
+    `rotation`. Used by patch_pairs --swap-ab to counterbalance the answer LETTER
+    against the relation without a full cyclic sweep."""
     key = resolve_prompt_key(reasoning)
     try:
         idx = int(type_key) - 1
@@ -165,9 +189,14 @@ def make_prompt_mc(
     opt = options[idx]
     base_choices = _parse_option_choices(opt)
     if base_choices:
-        rotated_choices = _rotate_list(base_choices, rotation)
-        opt = _format_options(rotated_choices)
-        choices = ", ".join([chr(ord("A") + i) for i in range(len(rotated_choices))])
+        if perm is not None:
+            if sorted(perm) != list(range(len(base_choices))):
+                raise ValueError(f"perm {perm} is not a permutation of {len(base_choices)} choices")
+            reordered = [base_choices[i] for i in perm]
+        else:
+            reordered = _rotate_list(base_choices, rotation)
+        opt = _format_options(reordered)
+        choices = ", ".join([chr(ord("A") + i) for i in range(len(reordered))])
     else:
         choices = derive_choices_text(opt)
     return prelude_explanations[key].format(choices=choices) + question + opt + postlude_explanations[key]

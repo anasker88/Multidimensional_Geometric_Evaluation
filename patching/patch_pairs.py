@@ -38,6 +38,7 @@ from common.prompting import (
     make_prompt_mc,
     resolve_prompt_key,
     remap_answer_for_rotation,
+    remap_answer_for_perm,
     _choice_count_for_type,
 )
 
@@ -212,20 +213,31 @@ def build_pairs(
     tokenizer,
     max_edit_tokens: int,
     rotations: Optional[List[int]] = None,
+    swap_ab: bool = False,
 ) -> List[Pair]:
     """Build clean/corrupted minimal pairs.
 
     `rotations` = option-list left-rotations to emit per pair (default [0], the
-    canonical clean=A layout). Passing e.g. [0, 1] emits each pair twice, once
-    canonical and once with the options cyclically rotated so the clean answer
-    lands on a non-A letter — this counterbalances the answer LETTER against the
-    relation (REEXPERIMENT_TODO P1-1). Rotation shifts the option block identically
-    in clean and corrupted prompts, so the question-edit token alignment is
-    preserved; only the stored clean_answer/corrupted_answer letters change (via
-    remap_answer_for_rotation). Same rotation is applied to both halves of a pair.
+    canonical clean=A layout). Passing e.g. [0, 1] emits each pair cyclically
+    rotated so the clean answer lands on a non-A letter.
+
+    `swap_ab` (REEXPERIMENT_TODO P1-1, preferred over rotation): emit each pair
+    TWICE — canonical (clean=A, corrupted=B) and with options A/B TRANSPOSED
+    (clean=B, corrupted=A), C/D untouched. This directly counterbalances the
+    answer LETTER against the geometric relation with a clean 2-subset (correct=A
+    vs correct=B) design, without the cyclic sweep's A->C/D remapping. The A/B
+    transposition shifts only the option block identically in clean and corrupted
+    prompts, so question-edit token alignment is preserved; the stored
+    clean_answer/corrupted_answer letters flip via remap_answer_for_perm.
     """
     if rotations is None:
         rotations = [0]
+    # Each variant is (kind, param): ("rot", k) cyclic-rotates by k; ("swap", None)
+    # transposes options A/B. swap_ab overrides rotations with [canonical, A/B-swap].
+    if swap_ab:
+        variants: List[Tuple[str, Optional[int]]] = [("rot", 0), ("swap", None)]
+    else:
+        variants = [("rot", r) for r in rotations]
     # group by (dimension, type) so options and answer semantics match within a pair
     groups: Dict[Tuple[int, str], List[QRow]] = {}
     for r in rows:
@@ -252,16 +264,28 @@ def build_pairs(
                     clean, corr = b, a
                     clean_edit, corr_edit = edit_b, edit_a
 
-                for rot in rotations:
-                    # skip rotations that don't move any option (nch<=1) except 0
-                    if rot != 0 and nch <= 1:
-                        continue
+                for vkind, vparam in variants:
+                    # render kwargs + answer-letter remap depend on the variant
+                    if vkind == "swap":
+                        if nch < 2:
+                            continue  # need >=2 options to transpose A/B
+                        perm = [1, 0] + list(range(2, nch))
+                        mc_kw = {"perm": perm}
+                        remap = lambda ans: remap_answer_for_perm(ans, perm) if nch else ans
+                        rot_field = 0
+                    else:  # ("rot", k)
+                        rot = vparam or 0
+                        if rot != 0 and nch <= 1:  # rotation that moves no option
+                            continue
+                        mc_kw = {"rotation": rot}
+                        remap = lambda ans, _r=rot: remap_answer_for_rotation(ans, _r, nch) if nch else ans
+                        rot_field = rot
                     clean_prompt = apply_chat_template(
-                        make_prompt_mc(clean.question, type_key, reasoning=prompt_key, rotation=rot),
+                        make_prompt_mc(clean.question, type_key, reasoning=prompt_key, **mc_kw),
                         model_name,
                     )
                     corr_prompt = apply_chat_template(
-                        make_prompt_mc(corr.question, type_key, reasoning=prompt_key, rotation=rot),
+                        make_prompt_mc(corr.question, type_key, reasoning=prompt_key, **mc_kw),
                         model_name,
                     )
                     key = (clean_prompt, corr_prompt)
@@ -269,9 +293,9 @@ def build_pairs(
                         continue
                     seen_prompt_pairs.add(key)
 
-                    # answer letters after the rotation (canonical letters are A/B at rot 0)
-                    clean_letter = remap_answer_for_rotation(clean.answer, rot, nch) if nch else clean.answer
-                    corr_letter = remap_answer_for_rotation(corr.answer, rot, nch) if nch else corr.answer
+                    # answer letters after the reorder (canonical letters are A/B at rot 0)
+                    clean_letter = remap(clean.answer)
+                    corr_letter = remap(corr.answer)
 
                     edit_start = edit_end = n_tokens = None
                     token_aligned: Optional[bool] = None
@@ -300,7 +324,7 @@ def build_pairs(
                             clean_row_index=clean.row_index,
                             corrupted_row_index=corr.row_index,
                             family=_classify_family(clean.question),
-                            rotation=rot,
+                            rotation=rot_field,
                         )
                     )
     return pairs
@@ -556,9 +580,13 @@ def main() -> None:
     ap.add_argument("--out", default="results/patching/pairs/pairs.json")
     ap.add_argument("--aligned-only", action="store_true",
                     help="write only token-aligned pairs (recommended for Phase 1)")
+    ap.add_argument("--swap-ab", action="store_true",
+                    help="P1-1 (preferred): emit each pair canonical (clean=A,corr=B) AND with "
+                         "options A/B transposed (clean=B,corr=A). Clean 2-subset counterbalance of "
+                         "the answer LETTER vs the relation; C/D untouched (no cyclic A->C/D remap).")
     ap.add_argument("--counterbalance", action="store_true",
-                    help="emit each pair at rotation 0 AND rotation 1 to balance the answer "
-                         "LETTER against the relation (P1-1: decorrelate 'output-A' from 'relation')")
+                    help="[legacy] emit each pair at rotation 0 AND rotation 1 (cyclic; clean A->C/D). "
+                         "Prefer --swap-ab for a clean correct=A / correct=B design.")
     ap.add_argument("--rotations", default="",
                     help="explicit comma-separated rotations to emit per pair (overrides "
                          "--counterbalance), e.g. '0,1,2,3' for a full cyclic sweep")
@@ -575,11 +603,15 @@ def main() -> None:
 
     rows = _read_rows(args.questions_csv, dims)
     print(f"Loaded {len(rows)} dimension-rows from {args.questions_csv} (dims={dims})")
-    print(f"Rotations per pair: {rotations}"
-          + ("  (counterbalanced A/B)" if rotations != [0] else ""))
+    if args.swap_ab:
+        print("Variants per pair: canonical (clean=A) + A/B swap (clean=B)  [--swap-ab]")
+    else:
+        print(f"Rotations per pair: {rotations}"
+              + ("  (counterbalanced A/B)" if rotations != [0] else ""))
 
     tokenizer = _load_tokenizer(args.model_name)
-    pairs = build_pairs(rows, prompt_key, args.model_name, tokenizer, args.max_edit_tokens, rotations)
+    pairs = build_pairs(rows, prompt_key, args.model_name, tokenizer, args.max_edit_tokens,
+                        rotations, swap_ab=args.swap_ab)
 
     if args.balance > 0:
         existing_keys = {(p.clean_prompt, p.corrupted_prompt) for p in pairs}

@@ -137,6 +137,7 @@ def process_pair(
     if not correct or abs(denom) < 1e-6:
         return {
             "dimension": pair["dimension"], "type_key": pair["type_key"],
+        "clean_answer": pair["clean_answer"],
             "source": pair["source"], "family": pair.get("family", "other"),
             "ld_clean": ld_clean, "ld_corr": ld_corr,
             "baseline_ok": False, "effects": {},
@@ -165,6 +166,7 @@ def process_pair(
 
     return {
         "dimension": pair["dimension"], "type_key": pair["type_key"],
+        "clean_answer": pair["clean_answer"],
         "source": pair["source"], "family": pair.get("family", "other"),
         "ld_clean": ld_clean, "ld_corr": ld_corr,
         "baseline_ok": True, "effects": effects,
@@ -221,6 +223,7 @@ def process_batch(model, batch, layers, directions, pos_modes, margin) -> List[D
     results = []
     for b in range(B):
         base = {"dimension": pairs[b]["dimension"], "type_key": pairs[b]["type_key"],
+                "clean_answer": pairs[b]["clean_answer"],
                 "source": pairs[b].get("source", ""), "family": pairs[b].get("family", "other"),
                 "ld_clean": ld_clean[b], "ld_corr": ld_corr[b]}
         ok = correct[b] and abs(denom[b]) >= 1e-6

@@ -128,7 +128,8 @@ def process_pair(model, pair, ranked, layers, n_heads, ks, n_rand, rng, margin,
     ld_clean = _logit_diff_at_last(model(clean), id_c, id_r)
     ld_corr = _logit_diff_at_last(model(corr), id_c, id_r)
     denom = ld_clean - ld_corr
-    base = {"dimension": pair["dimension"], "type_key": pair["type_key"]}
+    base = {"dimension": pair["dimension"], "type_key": pair["type_key"],
+            "clean_answer": pair["clean_answer"]}
     if not (ld_clean > margin and ld_corr < -margin) or abs(denom) < 1e-6:
         return {**base, "baseline_ok": False, "effects": {}}
 
