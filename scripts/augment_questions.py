@@ -98,13 +98,17 @@ def augment(in_path: Path, out_path: Path, n_maps_per_row: int = 5):
             mappings = make_mappings(letters, n=n_maps_per_row, seed=i)
             for m in mappings:
                 newrow = {}
-                for col in ['2D','3D','4D','answer','type']:
+                # Copy every source column verbatim, applying the vertex relabel
+                # only to the question text. Non-question columns (answer, type,
+                # and any construction metadata such as `family`) are invariant
+                # under relabeling and propagate unchanged.
+                for col in headers:
+                    if col in ('aug_source_id', 'aug_map'):
+                        continue
                     val = r.get(col, '')
-                    if col in ('2D','3D','4D') and val:
-                        val2 = apply_map_to_text(val, m)
-                    else:
-                        val2 = val
-                    newrow[col] = val2
+                    if col in ('2D', '3D', '4D') and val:
+                        val = apply_map_to_text(val, m)
+                    newrow[col] = val
                 key2 = (newrow.get('2D',''), newrow.get('3D',''), newrow.get('4D',''), newrow.get('answer',''), newrow.get('type',''))
                 if key2 in seen:
                     continue

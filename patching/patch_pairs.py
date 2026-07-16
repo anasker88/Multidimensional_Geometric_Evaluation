@@ -59,6 +59,7 @@ class QRow:
     question: str       # raw question text (the dimension-specific column)
     row_index: int      # 0-based data row (excludes header)
     aug_source_id: str
+    family: str = "other"   # construction family; from the CSV `family` column if present, else classified from text
 
 
 @dataclass
@@ -130,6 +131,9 @@ def _read_rows(csv_path: str, dims: List[int]) -> List[QRow]:
                 q = (row.get(col) or "").strip()
                 if not q or q == "-":
                     continue
+                # Prefer the dataset-native `family` column; fall back to
+                # text classification only when the column is absent/blank.
+                fam = (row.get("family") or "").strip() or _classify_family(q)
                 rows.append(
                     QRow(
                         dimension=dim,
@@ -138,6 +142,7 @@ def _read_rows(csv_path: str, dims: List[int]) -> List[QRow]:
                         question=q,
                         row_index=i,
                         aug_source_id=(row.get("aug_source_id") or "").strip(),
+                        family=fam,
                     )
                 )
     return rows
@@ -323,7 +328,7 @@ def build_pairs(
                             token_aligned=token_aligned,
                             clean_row_index=clean.row_index,
                             corrupted_row_index=corr.row_index,
-                            family=_classify_family(clean.question),
+                            family=clean.family,
                             rotation=rot_field,
                         )
                     )

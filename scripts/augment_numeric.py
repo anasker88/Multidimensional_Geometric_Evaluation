@@ -5,12 +5,25 @@ problems = []
 template_problems = defaultdict(list)  # {(dim, template_name): [problems]}
 current_template = None
 
+# Native construction family per template (the geometric object being measured).
+# Emitted as a first-class `family` column so downstream analysis reads it
+# directly instead of re-classifying question text.
+TEMPLATE_FAMILY = {
+    "2d_square": "box", "2d_rectangle": "box",
+    "2d_right_triangle": "simplex/tetra", "2d_circle": "circle/sphere",
+    "3d_cube": "box", "3d_rectangular_prism": "box",
+    "3d_pyramid": "simplex/tetra", "3d_sphere": "circle/sphere",
+    "4d_tesseract": "box", "4d_rect_par": "box",
+    "4d_4simplex": "simplex/tetra", "4d_3sphere": "circle/sphere",
+}
+
 def add(q, dim, ans):
     global current_template
+    fam = TEMPLATE_FAMILY.get(current_template, "other")
     # always append to global problems list for backward compatibility
-    problems.append((q, dim, ans))
+    problems.append((q, dim, ans, fam))
     if current_template:
-        template_problems[(dim, current_template)].append((q, dim, ans))
+        template_problems[(dim, current_template)].append((q, dim, ans, fam))
 
 # =========================
 # 2D TEMPLATES
@@ -206,6 +219,6 @@ for dim in (2, 3, 4):
 # OUTPUT
 # =========================
 
-print("question,dimension,answer")
-for q,d,a in final:
-    print(f"\"{q}\",{d},{a}")
+print("question,dimension,answer,family")
+for q,d,a,fam in final:
+    print(f"\"{q}\",{d},{a},{fam}")
