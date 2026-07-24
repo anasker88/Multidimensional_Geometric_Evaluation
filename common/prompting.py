@@ -497,6 +497,23 @@ def set_reasoning_effort(effort: Optional[str]) -> None:
     _REASONING_EFFORT = effort or None
 
 
+# When True, render the chat template in thinking/CoT mode (Qwen3 `enable_thinking`,
+# Gemma-4 `thinking`) and keep the <think> tag so the model produces a reasoning trace
+# before its answer. Default False = single-pass (thinking disabled). Set from the CLI.
+_ENABLE_THINKING: bool = False
+
+
+def set_enable_thinking(enabled: bool) -> None:
+    """Toggle CoT/thinking mode for chat-template rendering (default: disabled)."""
+    global _ENABLE_THINKING
+    _ENABLE_THINKING = bool(enabled)
+
+
+def get_enable_thinking() -> bool:
+    """Whether CoT/thinking mode is enabled for chat-template rendering."""
+    return _ENABLE_THINKING
+
+
 def _is_harmony_model(model_name: str) -> bool:
     """gpt-oss uses the harmony format; manual assistant prefill corrupts it."""
     lower = (model_name or "").lower()
@@ -509,7 +526,11 @@ def _template_kwargs_variants() -> list[dict]:
     When a reasoning effort is configured, try variants that pass it so
     templates supporting it (gpt-oss) honor it; always fall back to plain.
     """
-    base = [{"enable_thinking": False}, {}]
+    # CoT mode: try both family conventions (Qwen3 `enable_thinking`, Gemma-4 `thinking`).
+    if _ENABLE_THINKING:
+        base = [{"enable_thinking": True}, {"thinking": True}, {}]
+    else:
+        base = [{"enable_thinking": False}, {}]
     if _REASONING_EFFORT:
         re_kw = {"reasoning_effort": _REASONING_EFFORT}
         return [re_kw, {**base[0], **re_kw}] + base
@@ -611,8 +632,10 @@ def apply_chat_template(prompt: str, model_name: str) -> str:
                         add_generation_prompt=True,
                         **kwargs,
                     )
-                    # Strip any <think>...</think> or dangling <think> from the assistant prefix
-                    base = base.replace("<think>\n", "").replace("<think>", "")
+                    # Single-pass: strip the dangling <think> so the model answers directly.
+                    # CoT mode keeps it so the model produces a reasoning trace first.
+                    if not _ENABLE_THINKING:
+                        base = base.replace("<think>\n", "").replace("<think>", "")
                     return base + effective_prefill
                 except Exception:
                     pass
@@ -628,7 +651,8 @@ def apply_chat_template(prompt: str, model_name: str) -> str:
                     add_generation_prompt=True,
                     **kwargs,
                 )
-                base = base.replace("<think>\n", "").replace("<think>", "")
+                if not _ENABLE_THINKING:
+                    base = base.replace("<think>\n", "").replace("<think>", "")
                 return base + effective_prefill
             except Exception as e:
                 print(

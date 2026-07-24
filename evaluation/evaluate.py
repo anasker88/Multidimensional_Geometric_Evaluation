@@ -19,6 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from common.prompting import (
     apply_chat_template as _apply_chat_template,
     set_reasoning_effort as _set_reasoning_effort,
+    set_enable_thinking as _set_enable_thinking,
+    get_enable_thinking as _get_enable_thinking,
     make_prompt_mc_variants,
     make_prompt_numeric,
     make_prompt_numeric_mc_variants,
@@ -229,9 +231,10 @@ def chat(
                 batch_lps = lps_list
                 allow_retry = True
         else:
-            # Strip <think> from assistant prefix so decoder-only models
-            # generate direct answers rather than extended reasoning chains.
-            clean_batch = [p.replace("\n<think>\n", "\n") for p in batch_prompts]
+            # Single-pass: strip <think> from the assistant prefix so decoder-only models
+            # answer directly. In CoT mode, keep it so they emit a reasoning trace first.
+            clean_batch = batch_prompts if _get_enable_thinking() \
+                else [p.replace("\n<think>\n", "\n") for p in batch_prompts]
             inputs = tokenizer(clean_batch, return_tensors="pt", padding=True, truncation=True)
             inputs = {k: v.to(device) for k, v in inputs.items()}
             try:
@@ -350,6 +353,14 @@ def extract_answer(response: str) -> Optional[str]:
     if harmony:
         response = harmony.group(1).strip()
 
+    # Reasoning (CoT) models emit <think>...</think> then the committed answer. Parse only
+    # the post-thinking tail so the reasoning trace is ignored -- the offline-generation
+    # analogue of a vLLM reasoning parser's reasoning_content/content split (qwen3 / gemma4).
+    # No-op when the response has no </think> (e.g. the single-pass, thinking-disabled run).
+    think = re.search(r"</think>\s*(.+)$", response, re.IGNORECASE | re.DOTALL)
+    if think:
+        response = think.group(1).strip()
+
     tag_matches = re.findall(r"<answer>\s*([^<\n]+?)\s*</answer>", response, re.IGNORECASE)
     if tag_matches:
         val = tag_matches[-1].strip()
@@ -368,19 +379,38 @@ def extract_answer(response: str) -> Optional[str]:
         if m3:
             return m3.group(0).upper()
 
+    # This benchmark instructs models to BEGIN the response with the option letter, so a
+    # clean leading letter is the most reliable signal. Trust it before scanning the body,
+    # which can contain spurious A-E matches (e.g. the "*(a" inside "2*(abc + ...)", or a
+    # stray capital in the reasoning). High precision: the letter must be immediately
+    # followed by punctuation, a bold-close, or end-of-line -- never a space+word, so the
+    # article "A" in "A line is..." is not mistaken for an answer.
+    lead_match = re.match(r'[\s*_"\'“”‘’(]*([A-E])(?:\*\*|[.):,]|\s*(?:\n|$))', response.strip())
+    if lead_match:
+        return lead_match.group(1).upper()
+
     simple_match = re.search(r"Assistant:\s*The answer is\s*([A-E])\b", response, re.IGNORECASE)
     if simple_match:
         return simple_match.group(1).upper()
 
-    answer_is_match = re.search(r"answer\s+is\s*\*{0,2}\s*\(?([A-E])\)?", response, re.IGNORECASE)
-    if answer_is_match:
-        return answer_is_match.group(1).upper()
+    # Explicit answer statement, incl. the "Answer: X" form some reasoning models emit after
+    # a preamble ("...not determinable. Answer: B"). Mild non-compliance with the leading-
+    # letter instruction, but still a clear commitment -- take the LAST such statement.
+    # The colon/"is" and negative lookahead avoid spurious hits like "answer choices".
+    answer_stmt = None
+    for m in re.finditer(r"(?:final\s+)?answer\s*(?:\s+is|:)\s*\*{0,2}\s*\(?([A-E])\)?(?![A-Za-z])",
+                         response, re.IGNORECASE):
+        answer_stmt = m
+    if answer_stmt:
+        return answer_stmt.group(1).upper()
 
     choice_match = re.search(r"\b([A-E])[.:](?:\s|$)", response, re.MULTILINE)
     if choice_match:
         return choice_match.group(1).upper()
 
-    md_choice_match = re.search(r"\*{1,2}\s*\(?([A-E])\)?", response, re.IGNORECASE)
+    # markdown-emphasised choice, e.g. "**B**" or "*(C)*"; the negative lookahead prevents
+    # matching a letter that is really the start of a word (e.g. "*(abc" in a math formula).
+    md_choice_match = re.search(r"\*{1,2}\s*\(?([A-E])\)?(?![A-Za-z])", response, re.IGNORECASE)
     if md_choice_match:
         return md_choice_match.group(1).upper()
 
@@ -420,6 +450,14 @@ def extract_numeric(response: str) -> Optional[str]:
     harmony = re.search(r"assistantfinal\s*(.+)$", response, re.IGNORECASE | re.DOTALL)
     if harmony:
         response = harmony.group(1).strip()
+
+    # Reasoning (CoT) models emit <think>...</think> then the committed answer. Parse only
+    # the post-thinking tail so the reasoning trace is ignored -- the offline-generation
+    # analogue of a vLLM reasoning parser's reasoning_content/content split (qwen3 / gemma4).
+    # No-op when the response has no </think> (e.g. the single-pass, thinking-disabled run).
+    think = re.search(r"</think>\s*(.+)$", response, re.IGNORECASE | re.DOTALL)
+    if think:
+        response = think.group(1).strip()
 
     tag_matches = re.findall(r"<answer>\s*([^<\n]+?)\s*</answer>", response, re.IGNORECASE)
     if tag_matches:
@@ -922,6 +960,12 @@ if __name__ == "__main__":
                              "Use for a cheap partial re-eval after a dataset fix, e.g. --types numeric,numeric_mc.")
     parser.add_argument("--batch-size", type=int, default=8, help="Batch size for local generation")
     parser.add_argument("--max-new-tokens", type=int, default=2048, help="Max new tokens to generate per prompt")
+    parser.add_argument("--cot", "--enable-thinking", dest="cot", action="store_true",
+                        help="Chain-of-thought mode: render the chat template in thinking mode "
+                             "(Qwen3 enable_thinking / Gemma-4 thinking) and keep the <think> tag, "
+                             "so reasoning models emit a reasoning trace; the answer is parsed from "
+                             "the text after </think>. Raise --max-new-tokens accordingly. Only "
+                             "Qwen3/Qwen3.5 and Gemma-4 support this; other models have no thinking mode.")
     parser.add_argument("--greedy", action=argparse.BooleanOptionalAction, default=True, help="Greedy decoding (default). Use --no-greedy to sample at --temperature.")
     parser.add_argument("--temperature", type=float, default=0.1, help="Sampling temperature")
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p for sampling")
@@ -981,6 +1025,7 @@ if __name__ == "__main__":
             print("Invalid timestamp provided; using default.", file=sys.stderr)
     globals()["RESULTS_ROOT"] = args.results_root
     _set_reasoning_effort(getattr(args, "reasoning_effort", None))
+    _set_enable_thinking(getattr(args, "cot", False))
 
     if getattr(args, "types", None):
         globals()["_ONLY_TYPES"] = {t.strip() for t in args.types.split(",") if t.strip()}

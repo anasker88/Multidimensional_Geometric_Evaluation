@@ -97,7 +97,7 @@ def process_pair(model, pair, z_tmpl, layers, n_heads, directions, pos_modes, ma
     correct = (ld_clean > margin) and (ld_corr < -margin)
     denom = ld_clean - ld_corr
     base = {"dimension": pair["dimension"], "type_key": pair["type_key"],
-            "clean_answer": pair["clean_answer"],
+            "clean_answer": pair["clean_answer"], "family": pair.get("family"),
             "source": pair["source"], "ld_clean": ld_clean, "ld_corr": ld_corr}
     if not correct or abs(denom) < 1e-6:
         return {**base, "baseline_ok": False, "effects": {}}
@@ -184,7 +184,7 @@ def process_batch(model, batch, z_tmpl, layers, n_heads, directions, pos_modes, 
     results = []
     for b in range(B):
         base = {"dimension": pairs[b]["dimension"], "type_key": pairs[b]["type_key"],
-                "clean_answer": pairs[b]["clean_answer"],
+                "clean_answer": pairs[b]["clean_answer"], "family": pairs[b].get("family"),
                 "source": pairs[b].get("source", ""), "ld_clean": ld_clean[b], "ld_corr": ld_corr[b]}
         if not correct[b] or abs(denom[b]) < 1e-6:
             results.append({**base, "baseline_ok": False, "effects": {}})
@@ -201,9 +201,17 @@ def _aggregate_heads(results, layers, n_heads):
     for k in keys:
         groups = {"all": ok}
         by_dim = defaultdict(list)
+        by_family = defaultdict(list)
+        by_dim_family = defaultdict(list)
         for r in ok:
             by_dim[f"{r['dimension']}D"].append(r)
+            fam = r.get("family")
+            if fam:
+                by_family[f"fam:{fam}"].append(r)
+                by_dim_family[f"{r['dimension']}D:{fam}"].append(r)
         groups.update(by_dim)
+        groups.update(by_family)
+        groups.update(by_dim_family)
         agg[k] = {}
         for gname, rows in groups.items():
             acc = [[0.0] * n_heads for _ in layers]
